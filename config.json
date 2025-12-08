@@ -43,11 +43,21 @@
         "username": "bradkuhl",
         "password": "$2b$10$vUyXVqMKVfiIUKeA/P/Vi.2yswdtwyNnbvZCJscBLaCyUMIbaniGy",
         "role": "admin"
+      },
+      {
+        "username": "demo",
+        "password": "$2b$10$UkXakU65Eelztc5O0oZgrOU7RA5XqRDJVJvtddr.2VrHtyXpIL6YW",
+        "role": "demo"
+      },
+      {
+        "username": "team",
+        "password": "$2b$10$OLQPYFLYmK1tXLV9LUFZ/uDt9Dnio5aljZE/omT/BfEslJX9x29j.",
+        "role": "standard"
       }
     ]
   },
   "demoMode": {
-    "enabled": false,
-    "systemUserCreated": false
+    "enabled": true,
+    "systemUserCreated": true
   }
 }

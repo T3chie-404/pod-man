@@ -20,6 +20,10 @@ function addUserForm() {
                     Admin
                 </label>
                 <label>
+                    <input type="radio" name="role-${userId}" value="standard">
+                    Standard
+                </label>
+                <label>
                     <input type="radio" name="role-${userId}" value="demo">
                     Demo
                 </label>

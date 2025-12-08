@@ -131,7 +131,9 @@ function switchTab(tabName) {
             renderCharts();
             break;
         case 'terminal':
-            if (guardDangerous()) {
+            // Don't block demo users from terminal (they get demo-user shell)
+            // Only block if read-only AND not demo (admins/standard with read-only on)
+            if (window.userRole !== 'demo' && guardDangerous()) {
                 return;
             }
             if (!terminal) {
@@ -204,6 +206,7 @@ function initReadOnlyToggle() {
         toggle.disabled = true;
         toggle.title = 'Demo mode - contact admin for full access';
         pill.textContent = 'Demo Mode';
+        pill.classList.remove('unprotected');
         pill.classList.add('protected');
         state.readOnly = true;
         
@@ -213,6 +216,11 @@ function initReadOnlyToggle() {
         });
         
         return; // Skip normal toggle behavior
+    }
+    
+    // Standard users: can use advanced features but can't manage users
+    if (window.userRole === 'standard') {
+        // Toggle works normally for standard users
     }
 
     const apply = () => {
@@ -238,6 +246,8 @@ function guardDangerous() {
         alert('Demo mode - this action is restricted. Contact admin for full access.');
         return true;
     }
+    
+    // Standard users can use advanced features (not blocked by this)
     
     if (state.readOnly) {
         alert('Read-Only mode is on. Toggle off to run commands.');
@@ -760,6 +770,12 @@ function displayServices(services) {
 }
 
 async function controlService(name, action) {
+    // Check read-only mode first with popup
+    if (state.readOnly) {
+        alert('Read-Only mode is enabled. Turn off the toggle to use service controls.');
+        return;
+    }
+    
     if (guardDangerous()) return;
     
     if (name === 'xandeum-pod-monitor' && (action === 'stop' || action === 'restart')) {
@@ -790,6 +806,12 @@ async function controlService(name, action) {
 }
 
 async function restartAllServices() {
+    // Check read-only mode first with popup
+    if (state.readOnly) {
+        alert('Read-Only mode is enabled. Turn off the toggle to restart services.');
+        return;
+    }
+    
     if (guardDangerous()) return;
     if (!confirm('Are you sure you want to restart ALL services?')) {
         return;
@@ -1052,8 +1074,16 @@ function connectTerminalWebSocket() {
             role: window.userRole || 'admin'
         }));
         
+        // IMPORTANT: Remove old listeners before attaching new ones (prevents duplicate chars)
+        if (window.terminalDataHandler) {
+            terminal.onData(() => {});
+        }
+        if (window.terminalResizeHandler) {
+            terminal.onResize(() => {});
+        }
+        
         // Send data from terminal to WebSocket
-        terminal.onData(data => {
+        window.terminalDataHandler = terminal.onData(data => {
             if (terminalSocket.readyState === WebSocket.OPEN) {
                 terminalSocket.send(JSON.stringify({
                     type: 'input',
@@ -1063,7 +1093,7 @@ function connectTerminalWebSocket() {
         });
         
         // Handle terminal resize
-        terminal.onResize(({ cols, rows }) => {
+        window.terminalResizeHandler = terminal.onResize(({ cols, rows }) => {
             if (terminalSocket.readyState === WebSocket.OPEN) {
                 terminalSocket.send(JSON.stringify({
                     type: 'resize',

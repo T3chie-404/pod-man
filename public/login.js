@@ -37,7 +37,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
                 document.getElementById('user-management').style.display = 'block';
                 loadUsers();
             } else {
-                // Demo user - redirect to dashboard
+                // Standard or Demo user - redirect to dashboard
                 window.location.href = '/index.html';
             }
         } else {

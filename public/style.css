@@ -720,3 +720,10 @@ h3 {
     cursor: pointer;
     font-weight: 600;
 }
+
+/* Disabled buttons in services - more visible */
+.service-actions button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: #475569;
+}

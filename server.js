@@ -119,6 +119,24 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// Admin or Standard user middleware (excludes demo)
+function requireAdminOrStandard(req, res, next) {
+  if (!config.authentication.enabled) {
+    return next();
+  }
+  
+  if (!req.session || !req.session.username) {
+    return res.status(401).json({ success: false, error: "Not authenticated" });
+  }
+  
+  if (req.session.role === "demo") {
+    return res.status(403).json({ success: false, error: "Demo users cannot perform this action" });
+  }
+  
+  // Allow admin and standard
+  next();
+}
+
 // ============================================================================
 // API ENDPOINTS
 // ============================================================================
@@ -415,7 +433,7 @@ app.get("/api/services/:name", requireAuth, async (req, res) => {
 /**
  * Control a service (start/stop/restart)
  */
-app.post("/api/services/:name/:action", requireAdmin, async (req, res) => {
+app.post("/api/services/:name/:action", requireAdminOrStandard, async (req, res) => {
   if (!config.security.enableServiceControl) {
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
@@ -434,7 +452,7 @@ app.post("/api/services/:name/:action", requireAdmin, async (req, res) => {
 /**
  * Restart all services
  */
-app.post("/api/services/restart-all", requireAdmin, async (req, res) => {
+app.post("/api/services/restart-all", requireAdminOrStandard, async (req, res) => {
   if (!config.security.enableServiceControl) {
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
@@ -468,7 +486,7 @@ app.get("/api/logs/:service", requireAuth, async (req, res) => {
 /**
  * Find pubkey (restart pod and extract from logs)
  */
-app.post("/api/find-pubkey", requireAdmin, async (req, res) => {
+app.post("/api/find-pubkey", requireAdminOrStandard, async (req, res) => {
   try {
     const result = await LogManager.findPubkey();
     res.json(result);
@@ -653,47 +671,31 @@ wss.on("connection", (ws, req) => {
     return;
   }
   
-  // Get session from upgrade request
-  let userRole = 'admin'; // Default to admin if no auth
-  
-  if (config.authentication.enabled && req.headers.cookie) {
-    // Parse session from cookie (simplified - session is in cookie)
-    // For demo users, we'll use demo-user terminal
-    // Note: This is a simplified approach. In production, use proper session parsing.
-    try {
-      // We'll set userRole from frontend via WebSocket message instead
-      // For now, default to admin for backward compatibility
-    } catch (e) {
-      console.error('Session parse error:', e);
-    }
-  }
-  
   const sessionId = generateSessionId();
   let ptyProcess = null;
+  let sessionCreated = false;
   
   console.log(`[Terminal] New connection: ${sessionId}`);
   
-
   // Handle incoming data from WebSocket
-  let sessionCreated = false;
-  let pendingUserRole = 'admin';
-  
   ws.on("message", (data) => {
     try {
       const message = JSON.parse(data);
       
-      // Handle auth message (sent first by frontend)
+      // Handle auth message - create session with correct role
       if (message.type === "auth" && !sessionCreated) {
-        pendingUserRole = message.role || 'admin';
+        const userRole = message.role || 'admin';
         
-        // Now create the session with the correct role
         try {
-          ptyProcess = terminalManager.createSession(sessionId, 80, 24, pendingUserRole);
+          ptyProcess = terminalManager.createSession(sessionId, 80, 24, userRole);
+          sessionCreated = true;
           
           // Send data from PTY to WebSocket
           ptyProcess.on("data", (data) => {
             try {
-              ws.send(data);
+              if (ws.readyState === 1) { // OPEN
+                ws.send(data);
+              }
             } catch (error) {
               console.error(`[Terminal] Error sending data: ${error.message}`);
             }
@@ -703,12 +705,12 @@ wss.on("connection", (ws, req) => {
           ptyProcess.on("exit", () => {
             console.log(`[Terminal] PTY exited: ${sessionId}`);
             terminalManager.closeSession(sessionId);
-            ws.close();
+            if (ws.readyState === 1) {
+              ws.close();
+            }
           });
           
-          sessionCreated = true;
-          console.log(`[Terminal] Session created for role: ${pendingUserRole}`);
-          
+          console.log(`[Terminal] Session created for role: ${userRole}`);
         } catch (error) {
           console.error(`[Terminal] Error creating session: ${error.message}`);
           ws.send(`Error: ${error.message}\r\n`);
@@ -717,9 +719,9 @@ wss.on("connection", (ws, req) => {
         return;
       }
       
-      if (message.type === "input") {
+      if (message.type === "input" && sessionCreated) {
         terminalManager.writeToSession(sessionId, message.data);
-      } else if (message.type === "resize") {
+      } else if (message.type === "resize" && sessionCreated) {
         terminalManager.resizeSession(sessionId, message.cols, message.rows);
       }
     } catch (error) {
