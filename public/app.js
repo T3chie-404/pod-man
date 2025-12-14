@@ -774,8 +774,8 @@ async function controlService(name, action) {
     
     if (guardDangerous()) return;
     
-    if (name === 'xandeum-pod-monitor' && (action === 'stop' || action === 'restart')) {
-        if (!confirm(`WARNING: ${action} on xandeum-pod-monitor will disconnect this interface. Continue?`)) {
+    if (name === 'pod-manager' && (action === 'stop' || action === 'restart')) {
+        if (!confirm(`WARNING: ${action} on pod-manager will disconnect this interface. Continue?`)) {
             return;
         }
     } else {

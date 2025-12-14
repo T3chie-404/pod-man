@@ -107,13 +107,13 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Stop existing service if running
-if systemctl is-active --quiet xandeum-pod-monitor; then
-    systemctl stop xandeum-pod-monitor
+if systemctl is-active --quiet pod-manager; then
+    systemctl stop pod-manager
     echo -e "${YELLOW}!${NC} Stopped existing service"
 fi
 
 # Copy service file
-cp "$INSTALL_DIR/xandeum-pod-monitor.service" /etc/systemd/system/
+cp "$INSTALL_DIR/pod-manager.service" /etc/systemd/system/
 echo -e "${GREEN}✓${NC} Service file installed"
 
 # Reload systemd
@@ -121,19 +121,19 @@ systemctl daemon-reload
 echo -e "${GREEN}✓${NC} Systemd reloaded"
 
 # Enable service
-systemctl enable xandeum-pod-monitor
+systemctl enable pod-manager
 echo -e "${GREEN}✓${NC} Service enabled (starts on boot)"
 
 # Start service
-systemctl start xandeum-pod-monitor
+systemctl start pod-manager
 sleep 2
 
 # Check if service started
-if systemctl is-active --quiet xandeum-pod-monitor; then
+if systemctl is-active --quiet pod-manager; then
     echo -e "${GREEN}✓${NC} Service started successfully"
 else
     echo -e "${RED}✗ Service failed to start${NC}"
-    echo "  Check logs: sudo journalctl -u xandeum-pod-monitor -n 50"
+    echo "  Check logs: sudo journalctl -u pod-manager -n 50"
     exit 1
 fi
 
@@ -152,11 +152,11 @@ if [ -n "$SERVER_IP" ]; then
 fi
 echo ""
 echo -e "${YELLOW}Service Commands:${NC}"
-echo "  • Status:  sudo systemctl status xandeum-pod-monitor"
-echo "  • Stop:    sudo systemctl stop xandeum-pod-monitor"
-echo "  • Start:   sudo systemctl start xandeum-pod-monitor"
-echo "  • Restart: sudo systemctl restart xandeum-pod-monitor"
-echo "  • Logs:    sudo journalctl -u xandeum-pod-monitor -f"
+echo "  • Status:  sudo systemctl status pod-manager"
+echo "  • Stop:    sudo systemctl stop pod-manager"
+echo "  • Start:   sudo systemctl start pod-manager"
+echo "  • Restart: sudo systemctl restart pod-manager"
+echo "  • Logs:    sudo journalctl -u pod-manager -f"
 echo ""
 echo -e "${YELLOW}Optional: Enable HTTPS${NC}"
 echo "  • Run: sudo bash $INSTALL_DIR/setup-https.sh"

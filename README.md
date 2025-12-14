@@ -9,7 +9,7 @@ Interactive web-based monitoring and management dashboard for Xandeum pNodes. Mo
 
 ### 🎯 Dashboard Overview
 - **Real-time system stats**: CPU, RAM, disk usage, uptime (formatted as 1d 22h 30m)
-- **Service status cards**: xandminer, xandminerd, pod, xandeum-pod-monitor
+- **Service status cards**: xandminer, xandminerd, pod, pod-manager
 - **Network connectivity status**: External IP and public port accessibility
 - **Pod credits tracking**: Earned credits + top earner leaderboard
 - **DevNet eligibility**: 95th percentile threshold calculator
@@ -18,7 +18,7 @@ Interactive web-based monitoring and management dashboard for Xandeum pNodes. Mo
 - **Auto-refresh**: Every 10 seconds
 
 ### 🔧 Service Management
-- View status for all services (xandminer, xandminerd, pod, xandeum-pod-monitor)
+- View status for all services (xandminer, xandminerd, pod, pod-manager)
 - Start/Stop/Restart individual services
 - Restart all services with one click
 - View detailed service logs (scrollable up to 2000 chars per service)
@@ -148,14 +148,14 @@ sudo node server.js
 
 ```bash
 # Copy service file
-sudo cp xandeum-pod-monitor.service /etc/systemd/system/
+sudo cp pod-manager.service /etc/systemd/system/
 
 # Enable and start
-sudo systemctl enable xandeum-pod-monitor
-sudo systemctl start xandeum-pod-monitor
+sudo systemctl enable pod-manager
+sudo systemctl start pod-manager
 
 # Check status
-sudo systemctl status xandeum-pod-monitor
+sudo systemctl status pod-manager
 ```
 
 ## Usage
@@ -227,7 +227,7 @@ If you run `setup-https.sh` or change `host` to `0.0.0.0`:
 
 ### 🛡️ Built-in Protections
 
-- **Command whitelist**: Only xandminer, xandminerd, pod, xandeum-pod-monitor
+- **Command whitelist**: Only xandminer, xandminerd, pod, pod-manager
 - **Action whitelist**: Only start, stop, restart, status
 - **Input sanitization**: All user inputs are validated
 - **Dangerous command detection**: Warns before executing risky terminal commands
@@ -294,7 +294,7 @@ If you run `setup-https.sh` or change `host` to `0.0.0.0`:
 sudo netstat -tulpn | grep 7000
 
 # Check logs
-sudo journalctl -u xandeum-pod-monitor -n 50
+sudo journalctl -u pod-manager -n 50
 
 # Check for syntax errors
 sudo node -c /root/pod-man/server.js

@@ -11,7 +11,7 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=xandeum-pod-monitor
+SyslogIdentifier=pod-manager
 
 # Security hardening
 NoNewPrivileges=false

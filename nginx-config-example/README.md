@@ -62,10 +62,10 @@ sudo certbot --nginx -d your-domain.com
 
 ```bash
 # Copy the example config
-sudo cp nginx-reverse-proxy.conf /etc/nginx/sites-available/xandeum-pod-monitor
+sudo cp nginx-reverse-proxy.conf /etc/nginx/sites-available/pod-manager
 
 # Edit the configuration
-sudo nano /etc/nginx/sites-available/xandeum-pod-monitor
+sudo nano /etc/nginx/sites-available/pod-manager
 
 # Update these lines:
 # - server_name your-server.com  (change to your domain or IP)
@@ -77,7 +77,7 @@ sudo nano /etc/nginx/sites-available/xandeum-pod-monitor
 
 ```bash
 # Create symlink to enable site
-sudo ln -s /etc/nginx/sites-available/xandeum-pod-monitor /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/pod-manager /etc/nginx/sites-enabled/
 
 # Test configuration
 sudo nginx -t
@@ -88,7 +88,7 @@ sudo systemctl reload nginx
 
 ### 6. Update Monitor Configuration
 
-Edit `/root/xandeum-pod-monitor/config.json`:
+Edit `/root/pod-manager/config.json`:
 
 ```json
 {
@@ -161,7 +161,7 @@ sudo ufw status
 ls -la /etc/nginx/.htpasswd
 
 # Check nginx error log
-sudo tail -f /var/log/nginx/xandeum-pod-monitor-error.log
+sudo tail -f /var/log/nginx/pod-manager-error.log
 ```
 
 ### WebSocket not connecting
@@ -227,7 +227,7 @@ sudo systemctl reload nginx
 ### View Access Logs
 
 ```bash
-sudo tail -f /var/log/nginx/xandeum-pod-monitor-access.log
+sudo tail -f /var/log/nginx/pod-manager-access.log
 ```
 
 ### Change Password

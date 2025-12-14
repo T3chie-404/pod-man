@@ -44,7 +44,7 @@ The Xandeum Pod Manager (Pod-Man) v1.0.0 has been successfully built, tested, an
 ### Git Repository
 - ✅ Repository initialized
 - ✅ All files committed
-- ✅ Remote configured (git@github.com:T3chie-404/xandeum-pod-monitor.git)
+- ✅ Remote configured (git@github.com:T3chie-404/pod-manager.git)
 - ✅ .gitignore configured
 - ✅ Ready to push
 
@@ -77,14 +77,14 @@ ssh -L 7000:localhost:7000 ubuntu@192.190.136.28
 ## 📂 Project Structure
 
 ```
-/root/xandeum-pod-monitor/
+/root/pod-manager/
 ├── server.js                  # Main Express server
 ├── package.json              # Dependencies
 ├── config.json               # Configuration
 ├── README.md                 # Documentation
 ├── LICENSE                   # MIT License
 ├── .gitignore                # Git ignore rules
-├── xandeum-pod-monitor.service  # Systemd service
+├── pod-manager.service  # Systemd service
 ├── lib/                      # Backend modules
 │   ├── services.js          # Service management
 │   ├── api.js               # pRPC client
@@ -128,7 +128,7 @@ ssh -L 7000:localhost:7000 ubuntu@192.190.136.28
 
 On GitHub (https://github.com):
 1. Click "New repository"
-2. Name: `xandeum-pod-monitor`
+2. Name: `pod-manager`
 3. Description: "Interactive web-based monitoring dashboard for Xandeum pNodes"
 4. Public repository
 5. Don't initialize with README (we already have one)
@@ -137,7 +137,7 @@ On GitHub (https://github.com):
 ### 2. Push to GitHub
 
 ```bash
-cd /root/xandeum-pod-monitor
+cd /root/pod-manager
 
 # Ensure SSH key is configured
 eval "$(ssh-agent -s)"
@@ -154,15 +154,15 @@ git push -u origin master
 sudo pkill -f "node server.js"
 
 # Copy service file
-sudo cp xandeum-pod-monitor.service /etc/systemd/system/
+sudo cp pod-manager.service /etc/systemd/system/
 
 # Enable and start
 sudo systemctl daemon-reload
-sudo systemctl enable xandeum-pod-monitor
-sudo systemctl start xandeum-pod-monitor
+sudo systemctl enable pod-manager
+sudo systemctl start pod-manager
 
 # Check status
-sudo systemctl status xandeum-pod-monitor
+sudo systemctl status pod-manager
 ```
 
 ### 4. Access the Dashboard
@@ -225,7 +225,7 @@ ssh -L 7000:localhost:7000 user@your-server
 sudo netstat -tulpn | grep 7000
 
 # Check logs
-sudo journalctl -u xandeum-pod-monitor -n 50
+sudo journalctl -u pod-manager -n 50
 ```
 
 ### Terminal not connecting
@@ -258,7 +258,7 @@ sudo journalctl -u xandeum-pod-monitor -n 50
 
 ## 📫 Support
 
-- GitHub Issues: https://github.com/T3chie-404/xandeum-pod-monitor/issues
+- GitHub Issues: https://github.com/T3chie-404/pod-manager/issues
 - Xandeum Docs: https://docs.xandeum.network
 
 ---

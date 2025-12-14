@@ -203,7 +203,7 @@ app.post("/api/setup/initialize", async (req, res) => {
         const util = require('util');
         const execPromise = util.promisify(exec);
         
-        await execPromise('bash /root/xandeum-pod-monitor/scripts/setup-demo-user.sh');
+        await execPromise('bash /root/pod-man/scripts/setup-demo-user.sh');
         config.demoMode.systemUserCreated = true;
         config.demoMode.enabled = true;
         saveConfig();
@@ -319,7 +319,7 @@ app.post("/api/users/add", requireAdmin, async (req, res) => {
         const util = require('util');
         const execPromise = util.promisify(exec);
         
-        await execPromise('bash /root/xandeum-pod-monitor/scripts/setup-demo-user.sh');
+        await execPromise('bash /root/pod-man/scripts/setup-demo-user.sh');
         config.demoMode.systemUserCreated = true;
         config.demoMode.enabled = true;
         saveConfig();
