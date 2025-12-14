@@ -285,7 +285,7 @@ echo "  Remove HTTPS:  sudo bash setup-https.sh --remove"
 echo ""
 
 # Save configuration info
-cat > /root/xandeum-pod-monitor/.https-config <<EOF
+cat > /root/pod-man/.https-config <<EOF
 HTTPS_ENABLED=true
 HTTPS_PORT=$HTTPS_PORT
 USERNAME=$USERNAME
@@ -294,5 +294,5 @@ SERVER_NAME=$SERVER_NAME
 INSTALL_DATE=$(date)
 EOF
 
-echo -e "${GREEN}Configuration saved to: /root/xandeum-pod-monitor/.https-config${NC}"
+echo -e "${GREEN}Configuration saved to: /root/pod-man/.https-config${NC}"
 echo ""

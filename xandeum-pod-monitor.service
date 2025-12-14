@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/xandeum-pod-monitor
-ExecStart=/usr/bin/node /root/xandeum-pod-monitor/server.js
+WorkingDirectory=/root/pod-man
+ExecStart=/usr/bin/node /root/pod-man/server.js
 Restart=always
 RestartSec=10
 StandardOutput=journal

@@ -85,7 +85,7 @@ Interactive web-based monitoring and management dashboard for Xandeum pNodes. Mo
 **NEW!** The easiest way to enable secure HTTPS access:
 
 ```bash
-cd /root/xandeum-pod-monitor
+cd /root/pod-man
 sudo bash setup-https.sh
 ```
 
@@ -297,7 +297,7 @@ sudo netstat -tulpn | grep 7000
 sudo journalctl -u xandeum-pod-monitor -n 50
 
 # Check for syntax errors
-sudo node -c /root/xandeum-pod-monitor/server.js
+sudo node -c /root/pod-man/server.js
 ```
 
 ### Terminal not connecting

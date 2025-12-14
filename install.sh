@@ -22,7 +22,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Detect installation directory
-INSTALL_DIR="/root/xandeum-pod-monitor"
+INSTALL_DIR="/root/pod-man"
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BLUE}  Step 1: Checking Dependencies${NC}"
