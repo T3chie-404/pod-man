@@ -1,6 +1,6 @@
 # nginx Reverse Proxy Setup
 
-This guide explains how to set up nginx as a reverse proxy with HTTPS and basic authentication for the Xandeum Pod Monitor.
+This guide explains how to set up nginx as a reverse proxy with HTTPS and basic authentication for the Xandeum Pod Manager.
 
 ## Why Use nginx?
 
@@ -15,7 +15,7 @@ This guide explains how to set up nginx as a reverse proxy with HTTPS and basic 
 - Ubuntu/Debian server
 - Root access
 - Domain name (optional, can use IP)
-- Xandeum Pod Monitor already installed
+- Xandeum Pod Manager already installed
 
 ## Step-by-Step Installation
 
@@ -125,7 +125,7 @@ sudo ufw status
 - [x] Basic authentication enabled
 - [x] Rate limiting configured
 - [x] Firewall allows only 80/443
-- [x] Pod Monitor binds to localhost only
+- [x] Pod Manager binds to localhost only
 - [x] Security headers enabled
 - [x] Strong password set
 
@@ -253,4 +253,4 @@ sudo htpasswd /etc/nginx/.htpasswd admin
 For issues with:
 - nginx: Check [nginx documentation](https://nginx.org/en/docs/)
 - Let's Encrypt: Check [Certbot documentation](https://certbot.eff.org/)
-- Pod Monitor: Open issue on GitHub
+- Pod Manager: Open issue on GitHub

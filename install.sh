@@ -63,7 +63,7 @@ fi
 
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  Step 2: Installing Pod Monitor${NC}"
+echo -e "${BLUE}  Step 2: Installing Pod Manager${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
@@ -90,7 +90,7 @@ if [ -d "$INSTALL_DIR" ]; then
     fi
 else
     echo "Cloning repository..."
-    git clone https://github.com/T3chie-404/xandeum-pod-monitor.git "$INSTALL_DIR"
+    git clone https://github.com/T3chie-404/pod-man.git "$INSTALL_DIR"
     cd "$INSTALL_DIR"
     echo -e "${GREEN}✓${NC} Repository cloned"
 fi

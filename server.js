@@ -516,6 +516,9 @@ app.post("/api/prpc/:method", requireAuth, async (req, res) => {
       case "get-pods":
         result = await PRPCClient.getPods();
         break;
+      case "get-pods-with-stats":
+        result = await PRPCClient.getPodsWithStats();
+        break;
       default:
         // Custom method
         result = await PRPCClient.customCall(method, params);
@@ -609,7 +612,7 @@ app.get("/api/pod-pubkey", requireAuth, async (req, res) => {
 app.get("/api/pod-credits", requireAuth, async (req, res) => {
   try {
     const [creditsResp, pubkeyResult] = await Promise.all([
-      axios.get("https://pods-credit.vercel.app/api/pods-credits", { timeout: 5000 }),
+      axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
       LogManager.getPubkeyPassive()
     ]);
 
@@ -631,15 +634,11 @@ app.get("/api/pod-credits", requireAuth, async (req, res) => {
 /**
  * DevNet eligibility (95th percentile * 0.8 threshold)
  */
-app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {
-  try {
-    const [creditsResp, pubkeyResult] = await Promise.all([
-      axios.get("https://pods-credit.vercel.app/api/pods-credits", { timeout: 5000 }),
+app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {  try {    const [creditsResp, pubkeyResult] = await Promise.all([
+      axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
       LogManager.getPubkeyPassive()
     ]);
-
-    const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];
-    const creditsOnly = list.map(p => p.credits).filter(c => typeof c === "number").sort((a, b) => a - b);
+    const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];    const creditsOnly = list.map(p => p.credits).filter(c => typeof c === "number").sort((a, b) => a - b);
     const count = creditsOnly.length;
     const p95 = count > 0 ? creditsOnly[Math.floor(0.95 * (count - 1))] : null;
     const threshold = p95 !== null ? Math.round(p95 * 0.8) : null;
@@ -647,8 +646,7 @@ app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {
 
     const pubkey = pubkeyResult.pubkey || null;
     const localEntry = pubkey ? list.find(p => p.pod_id === pubkey) : null;
-    const localCredits = localEntry ? localEntry.credits : null;
-    const eligible = threshold !== null && localCredits !== null ? localCredits >= threshold : null;
+    const localCredits = localEntry ? localEntry.credits : null;    const eligible = threshold !== null && localCredits !== null ? localCredits >= threshold : null;
 
     res.json({
       success: true,
@@ -660,8 +658,7 @@ app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {
       eligible,
       totalPods: count
     });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+  } catch (error) {    res.status(500).json({ success: false, error: error.message });
   }
 });
 

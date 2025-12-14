@@ -410,11 +410,8 @@ async function updateHealthScore(data) {
 }
 
 // Credits & charts
-async function loadDashboardCredits() {
-    try {
-        const response = await fetch('/api/devnet-eligibility');
-        const data = await response.json();
-        if (!data.success) throw new Error(data.error || 'Failed to load credits');
+async function loadDashboardCredits() {    try {
+        const response = await fetch('/api/devnet-eligibility');        const data = await response.json();        if (!data.success) throw new Error(data.error || 'Failed to load credits');
 
         const earnedEl = document.getElementById('credits-earned');
         const maxEl = document.getElementById('credits-max');
@@ -423,8 +420,7 @@ async function loadDashboardCredits() {
 
         renderEligibilityOutput(data);
         return { localCredits: data.localCredits, maxCredits: data.maxCredits };
-    } catch (error) {
-        console.error('Error loading credits:', error);
+    } catch (error) {        console.error('Error loading credits:', error);
         const earnedEl = document.getElementById('credits-earned');
         const maxEl = document.getElementById('credits-max');
         if (earnedEl) earnedEl.textContent = '--';

@@ -126,7 +126,7 @@ SKIP_HTTPS_PROMPT=1 HTTPS_USERNAME=admin HTTPS_PASSWORD=yourpass sudo bash setup
 ### Quick Install
 
 ```bash
-wget https://raw.githubusercontent.com/T3chie-404/xandeum-pod-monitor/master/install.sh
+wget https://raw.githubusercontent.com/T3chie-404/pod-man/master/install.sh
 sudo bash install.sh
 ```
 
@@ -134,8 +134,8 @@ sudo bash install.sh
 
 ```bash
 # Clone the repository
-git clone https://github.com/T3chie-404/xandeum-pod-monitor.git
-cd xandeum-pod-monitor
+git clone https://github.com/T3chie-404/pod-man.git
+cd pod-man
 
 # Install dependencies
 npm install
@@ -370,7 +370,7 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details
 
 **T3chie-404**
 - GitHub: [@T3chie-404](https://github.com/T3chie-404)
-- Repository: [xandeum-pod-monitor](https://github.com/T3chie-404/xandeum-pod-monitor)
+- Repository: [pod-man](https://github.com/T3chie-404/pod-man)
 
 ## Acknowledgments
 
@@ -382,7 +382,7 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details
 ## Support
 
 For issues, questions, or contributions:
-- Open an issue on [GitHub](https://github.com/T3chie-404/xandeum-pod-monitor/issues)
+- Open an issue on [GitHub](https://github.com/T3chie-404/pod-man/issues)
 - Star the repository if you find it useful!
 
 ---
