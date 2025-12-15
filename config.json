@@ -61,10 +61,10 @@
     "systemUserCreated": true
   },
   "centralManagement": {
-    "enabled": false,
-    "apiKey": null,
-    "centralUrl": null,
-    "autoConnect": false,
+    "enabled": true,
+    "apiKey": "PMAN_v1_22a2cbcf7262a748506b2d339698156baa6f951c45fa7b85e5b14b935c06e979_31b4912d",
+    "centralUrl": "wss://pod-man.com/agent-connect",
+    "autoConnect": true,
     "metricsInterval": 30000,
     "encryptedKeyFile": "/root/pod-man/.api-key.enc"
   }
