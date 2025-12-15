@@ -30,3 +30,5 @@ config.local.json
 
 # HTTPS configuration (contains sensitive info)
 .https-config
+config.json
+*.local.json
