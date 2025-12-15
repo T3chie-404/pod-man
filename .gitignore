@@ -32,3 +32,5 @@ config.local.json
 .https-config
 config.json
 *.local.json
+config.json
+*.local.json
