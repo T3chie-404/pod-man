@@ -727,3 +727,25 @@ h3 {
     cursor: not-allowed;
     background: #475569;
 }
+
+/* Central Management Config Page */
+.help-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 5px;
+}
+
+.button-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.info {
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid #6366f1;
+    color: #a5b4fc;
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 20px;
+}

@@ -59,5 +59,13 @@
   "demoMode": {
     "enabled": true,
     "systemUserCreated": true
+  },
+  "centralManagement": {
+    "enabled": false,
+    "apiKey": null,
+    "centralUrl": null,
+    "autoConnect": false,
+    "metricsInterval": 30000,
+    "encryptedKeyFile": "/root/pod-man/.api-key.enc"
   }
 }

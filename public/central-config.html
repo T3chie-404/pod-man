@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Central Management - Pod Manager</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="header-content">
+                <h1>⚡ Pod Manager - Central Management</h1>
+                <button class="btn btn-secondary" onclick="window.location.href='/index.html'">← Back to Dashboard</button>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="card">
+                <h2>Central Management Configuration</h2>
+                <p class="text-secondary">Connect this pNode to a central management server for multi-server monitoring.</p>
+
+                <div id="status-section" style="margin: 20px 0;">
+                    <h3>Connection Status</h3>
+                    <div id="connection-status">Loading...</div>
+                </div>
+
+                <hr style="margin: 30px 0; border: 1px solid var(--border-color);">
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="enabled-toggle"> Enable Central Management
+                    </label>
+                    <p class="help-text">Allow this pNode to connect to a central management server</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="central-url">Central Server URL</label>
+                    <input type="text" id="central-url" placeholder="wss://pod-manager.com/agent-connect">
+                    <p class="help-text">WebSocket URL of the central management server</p>
+                </div>
+
+                <div class="form-group">
+                    <label for="api-key">API Key</label>
+                    <input type="password" id="api-key" placeholder="PMAN_v1_...">
+                    <p class="help-text">API key from your central management account</p>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="auto-connect"> Auto-connect on startup
+                    </label>
+                    <p class="help-text">Automatically connect when Pod-Man service starts</p>
+                </div>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="saveConfiguration()">Save Configuration</button>
+                    <button class="btn btn-secondary" onclick="testConnection()">Test Connection</button>
+                    <button class="btn btn-danger" onclick="disconnect()">Disconnect</button>
+                </div>
+
+                <div id="message" style="margin-top: 20px;"></div>
+            </div>
+
+            <div class="card" style="margin-top: 20px;">
+                <h3>How to Get an API Key</h3>
+                <ol>
+                    <li>Register an account at the central management platform</li>
+                    <li>Navigate to "Add pNode" section</li>
+                    <li>Generate a new API key</li>
+                    <li>Copy the API key and paste it above</li>
+                    <li>Save configuration and test connection</li>
+                </ol>
+                
+                <h3 style="margin-top: 20px;">Security Notes</h3>
+                <ul>
+                    <li>API key is stored encrypted on this machine</li>
+                    <li>Connection uses TLS (wss://)</li>
+                    <li>Commands are whitelisted and rate-limited</li>
+                    <li>You can revoke access anytime from central dashboard</li>
+                    <li>Local Pod-Man continues working if central server is down</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script src="central-config.js"></script>
+</body>
+</html>
+

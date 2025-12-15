@@ -14,9 +14,13 @@ const LogManager = require("./lib/logs");
 const NetworkManager = require("./lib/network");
 const SystemMonitor = require("./lib/system");
 const terminalManager = require("./lib/terminal");
+const CentralConnector = require("./lib/central/central-connector");
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+
+// Initialize Central Connector
+const centralConnector = new CentralConnector(config.centralManagement || {});
 
 // Initialize Express app
 const app = express();
@@ -380,6 +384,73 @@ app.get("/api/users/list", requireAdmin, (req, res) => {
   res.json({ success: true, users });
 });
 
+
+
+// ============================================================================
+// CENTRAL MANAGEMENT ENDPOINTS
+// ============================================================================
+
+/**
+ * Get central connection status
+ */
+app.get("/api/central/status", requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    status: centralConnector.getStatus()
+  });
+});
+
+/**
+ * Update central connection config (admin only)
+ */
+app.post("/api/central/configure", requireAdmin, async (req, res) => {
+  try {
+    const { enabled, apiKey, centralUrl, autoConnect } = req.body;
+    
+    // Update config file
+    if (apiKey !== undefined) {
+      config.centralManagement.apiKey = apiKey;
+    }
+    if (centralUrl !== undefined) {
+      config.centralManagement.centralUrl = centralUrl;
+    }
+    if (enabled !== undefined) {
+      config.centralManagement.enabled = enabled;
+    }
+    if (autoConnect !== undefined) {
+      config.centralManagement.autoConnect = autoConnect;
+    }
+    
+    saveConfig();
+    
+    // Update connector
+    centralConnector.updateConfig(config.centralManagement);
+    
+    res.json({ success: true, status: centralConnector.getStatus() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Connect to central server (admin only)
+ */
+app.post("/api/central/connect", requireAdmin, async (req, res) => {
+  try {
+    await centralConnector.connect();
+    res.json({ success: true, status: centralConnector.getStatus() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Disconnect from central server (admin only)
+ */
+app.post("/api/central/disconnect", requireAdmin, (req, res) => {
+  centralConnector.disconnect();
+  res.json({ success: true, status: centralConnector.getStatus() });
+});
 
 /**
  * Dashboard overview
@@ -776,6 +847,12 @@ server.listen(PORT, HOST, () => {
   console.log("");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("");
+  
+  // Connect to central management server if enabled
+  if (config.centralManagement && config.centralManagement.enabled && config.centralManagement.autoConnect) {
+    console.log("[Central] Auto-connecting to central management server...");
+    centralConnector.connect();
+  }
 });
 
 // Handle graceful shutdown
