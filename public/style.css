@@ -749,3 +749,33 @@ h3 {
     border-radius: 6px;
     margin-bottom: 20px;
 }
+
+/* Fix button scaling on logs page - prevent buttons from getting too tall */
+.log-line-btn,
+.btn {
+    max-height: 40px !important;
+    height: auto !important;
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
+    align-self: center !important;
+}
+
+/* Ensure buttons in flex containers don't stretch */
+.log-controls .btn,
+.log-controls .log-line-btn,
+div[style*="flex"] .btn {
+    align-self: center !important;
+    flex: 0 0 auto !important;
+}
+
+/* Fix pubkey input container */
+#manual-pubkey-input {
+    max-height: 40px !important;
+    height: auto !important;
+    line-height: 1.4 !important;
+}
+
+/* Ensure log controls container doesn't stretch children */
+.log-controls {
+    align-items: center !important;
+}

@@ -118,6 +118,26 @@
                         <div class="stat-value" id="credits-max">--</div>
                         <div class="stat-label">Highest credits (max)</div>
                     </div>
+                
+                </div>
+
+                <!-- Versions -->
+                <div class="section">
+                    <h3>Component Versions</h3>
+                    <div class="card-grid">
+                        <div class="card">
+                            <h3>xandminer</h3>
+                            <div class="stat-value" id="version-xandminer">--</div>
+                        </div>
+                        <div class="card">
+                            <h3>xandminerd</h3>
+                            <div class="stat-value" id="version-xandminerd">--</div>
+                        </div>
+                        <div class="card">
+                            <h3>pod</h3>
+                            <div class="stat-value" id="version-pod">--</div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Service Status -->
@@ -184,7 +204,9 @@
                     </div>
                     <input type="text" id="log-filter" placeholder="Filter logs (e.g., 'error', 'pubkey')">
                     <button class="btn btn-primary" onclick="loadLogs()">Load Logs</button>
-                    <button class="btn btn-secondary" id="find-pubkey-btn" style="display:none;" onclick="findPubkey()">Find Pubkey (grep logs)</button>
+                    
+                    
+                    
                 </div>
                 <div id="logs-output" class="logs-container">
                     <p>Select a service and click "Load Logs"</p>

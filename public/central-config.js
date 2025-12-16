@@ -22,6 +22,43 @@ async function loadConfig() {
     }
 }
 
+
+// Auto-refresh connection status every 10 seconds
+let statusRefreshInterval = null;
+
+function startStatusAutoRefresh() {
+    // Clear existing interval if any
+    if (statusRefreshInterval) {
+        clearInterval(statusRefreshInterval);
+    }
+    
+    // Refresh immediately
+    loadConfig();
+    
+    // Then refresh every 10 seconds
+    statusRefreshInterval = setInterval(() => {
+        loadConfig();
+    }, 10000); // 10 seconds
+}
+
+function stopStatusAutoRefresh() {
+    if (statusRefreshInterval) {
+        clearInterval(statusRefreshInterval);
+        statusRefreshInterval = null;
+    }
+}
+
+// Start auto-refresh when page loads
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startStatusAutoRefresh);
+} else {
+    startStatusAutoRefresh();
+}
+
+// Stop when page unloads
+window.addEventListener("beforeunload", stopStatusAutoRefresh);
+
+
 function updateStatusDisplay(status) {
     const statusDiv = document.getElementById('connection-status');
     

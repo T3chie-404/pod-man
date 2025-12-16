@@ -3,6 +3,9 @@ const http = require("http");
 const WebSocket = require("ws");
 const path = require("path");
 const fs = require("fs");
+const axios = require("axios");
+const session = require("express-session");
+const bcrypt = require("bcryptjs");
 
 // Import our library modules
 const ServiceManager = require("./lib/services");
@@ -10,21 +13,43 @@ const PRPCClient = require("./lib/api");
 const LogManager = require("./lib/logs");
 const NetworkManager = require("./lib/network");
 const SystemMonitor = require("./lib/system");
-const TerminalManager = require("./lib/terminal");
+const terminalManager = require("./lib/terminal");
+const CentralConnector = require("./lib/central/central-connector");
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
 
+// Initialize Central Connector
+const centralConnector = new CentralConnector(config.centralManagement || {});
+
 // Initialize Express app
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({
+  server,
+  verifyClient: (info, callback) => {
+    // We'll handle auth in the connection handler
+    callback(true);
+  }
+});
+
 
 // Initialize Terminal Manager
-const terminalManager = new TerminalManager(config.terminal);
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+
+// Session middleware for authentication
+app.use(session({
+  secret: config.authentication.sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    maxAge: config.authentication.sessionTimeout,
+    httpOnly: true,
+    secure: false // Set to true if using HTTPS
+  }
+}));
 app.use(express.static("public"));
 
 // Rate limiting (simple in-memory implementation)
@@ -64,13 +89,373 @@ function checkRateLimit(req, res, next) {
 app.use(checkRateLimit);
 
 // ============================================================================
+// AUTHENTICATION HELPERS
+// ============================================================================
+
+// Save config to file
+function saveConfig() {
+  fs.writeFileSync("./config.json", JSON.stringify(config, null, 2), "utf8");
+}
+
+// Auth middleware
+function requireAuth(req, res, next) {
+  if (!config.authentication.enabled) {
+    return next();
+  }
+  
+  if (!req.session || !req.session.username) {
+    return res.status(401).json({ success: false, error: "Not authenticated" });
+  }
+  
+  next();
+}
+
+// Admin-only middleware
+function requireAdmin(req, res, next) {
+  if (!config.authentication.enabled) {
+    return next();
+  }
+  
+  if (!req.session || !req.session.username || req.session.role !== "admin") {
+    return res.status(403).json({ success: false, error: "Admin access required" });
+  }
+  
+  next();
+}
+
+// Admin or Standard user middleware (excludes demo)
+function requireAdminOrStandard(req, res, next) {
+  if (!config.authentication.enabled) {
+    return next();
+  }
+  
+  if (!req.session || !req.session.username) {
+    return res.status(401).json({ success: false, error: "Not authenticated" });
+  }
+  
+  if (req.session.role === "demo") {
+    return res.status(403).json({ success: false, error: "Demo users cannot perform this action" });
+  }
+  
+  // Allow admin and standard
+  next();
+}
+
+// ============================================================================
 // API ENDPOINTS
 // ============================================================================
+
+// ============================================================================
+// AUTHENTICATION ENDPOINTS
+// ============================================================================
+
+/**
+ * Check if setup is needed (no users exist)
+ */
+app.get("/api/setup/status", (req, res) => {
+  res.json({
+    success: true,
+    needsSetup: config.authentication.users.length === 0
+  });
+});
+
+/**
+ * Initialize first-time setup (create admin + optional users)
+ */
+app.post("/api/setup/initialize", async (req, res) => {
+  try {
+    // Only allow if no users exist
+    if (config.authentication.users.length > 0) {
+      return res.status(403).json({ success: false, error: "Setup already completed" });
+    }
+    
+    const { users } = req.body;
+    
+    if (!users || !Array.isArray(users) || users.length === 0) {
+      return res.status(400).json({ success: false, error: "No users provided" });
+    }
+    
+    // Validate and hash passwords
+    const newUsers = [];
+    let hasDemoUser = false;
+    
+    for (const user of users) {
+      if (!user.username || !user.password || !user.role) {
+        return res.status(400).json({ success: false, error: "Invalid user data" });
+      }
+      
+      const hashedPassword = await bcrypt.hash(user.password, 10);
+      newUsers.push({
+        username: user.username,
+        password: hashedPassword,
+        role: user.role
+      });
+      
+      if (user.role === 'demo') {
+        hasDemoUser = true;
+      }
+    }
+    
+    // Save users to config
+    config.authentication.users = newUsers;
+    saveConfig();
+    
+    // If demo user created, setup system account
+    if (hasDemoUser && !config.demoMode.systemUserCreated) {
+      try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        
+        await execPromise('bash /root/pod-man/scripts/setup-demo-user.sh');
+        config.demoMode.systemUserCreated = true;
+        config.demoMode.enabled = true;
+        saveConfig();
+      } catch (error) {
+        console.error('Failed to setup demo user:', error);
+      }
+    }
+    
+    res.json({ success: true, message: "Setup completed" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Login
+ */
+app.post("/api/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.status(400).json({ success: false, error: "Username and password required" });
+    }
+    
+    const user = config.authentication.users.find(u => u.username === username);
+    
+    if (!user) {
+      return res.status(401).json({ success: false, error: "Invalid credentials" });
+    }
+    
+    const validPassword = await bcrypt.compare(password, user.password);
+    
+    if (!validPassword) {
+      return res.status(401).json({ success: false, error: "Invalid credentials" });
+    }
+    
+    // Create session
+    req.session.username = user.username;
+    req.session.role = user.role;
+    
+    res.json({
+      success: true,
+      username: user.username,
+      role: user.role
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Logout
+ */
+app.post("/api/logout", (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+    res.json({ success: true });
+  });
+});
+
+/**
+ * Check session
+ */
+app.get("/api/check-session", (req, res) => {
+  if (req.session && req.session.username) {
+    res.json({
+      success: true,
+      authenticated: true,
+      username: req.session.username,
+      role: req.session.role
+    });
+  } else {
+    res.json({
+      success: true,
+      authenticated: false
+    });
+  }
+});
+
+/**
+ * Add user (admin only)
+ */
+app.post("/api/users/add", requireAdmin, async (req, res) => {
+  try {
+    const { username, password, role } = req.body;
+    
+    if (!username || !password || !role) {
+      return res.status(400).json({ success: false, error: "Username, password, and role required" });
+    }
+    
+    // Check if user exists
+    if (config.authentication.users.find(u => u.username === username)) {
+      return res.status(400).json({ success: false, error: "Username already exists" });
+    }
+    
+    // Hash password and add user
+    const hashedPassword = await bcrypt.hash(password, 10);
+    config.authentication.users.push({
+      username,
+      password: hashedPassword,
+      role
+    });
+    
+    saveConfig();
+    
+    // If first demo user, setup system account
+    if (role === 'demo' && !config.demoMode.systemUserCreated) {
+      try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execPromise = util.promisify(exec);
+        
+        await execPromise('bash /root/pod-man/scripts/setup-demo-user.sh');
+        config.demoMode.systemUserCreated = true;
+        config.demoMode.enabled = true;
+        saveConfig();
+      } catch (error) {
+        console.error('Failed to setup demo user:', error);
+      }
+    }
+    
+    res.json({ success: true, message: "User added" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Delete user (admin only)
+ */
+app.post("/api/users/delete", requireAdmin, (req, res) => {
+  try {
+    const { username } = req.body;
+    
+    if (!username) {
+      return res.status(400).json({ success: false, error: "Username required" });
+    }
+    
+    // Don't allow deleting yourself
+    if (username === req.session.username) {
+      return res.status(400).json({ success: false, error: "Cannot delete your own account" });
+    }
+    
+    // Ensure at least one admin remains
+    const admins = config.authentication.users.filter(u => u.role === 'admin');
+    const userToDelete = config.authentication.users.find(u => u.username === username);
+    
+    if (userToDelete && userToDelete.role === 'admin' && admins.length <= 1) {
+      return res.status(400).json({ success: false, error: "Cannot delete last admin user" });
+    }
+    
+    // Remove user
+    config.authentication.users = config.authentication.users.filter(u => u.username !== username);
+    saveConfig();
+    
+    res.json({ success: true, message: "User deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * List users (admin only)
+ */
+app.get("/api/users/list", requireAdmin, (req, res) => {
+  const users = config.authentication.users.map(u => ({
+    username: u.username,
+    role: u.role
+  }));
+  
+  res.json({ success: true, users });
+});
+
+
+
+// ============================================================================
+// CENTRAL MANAGEMENT ENDPOINTS
+// ============================================================================
+
+/**
+ * Get central connection status
+ */
+app.get("/api/central/status", requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    status: centralConnector.getStatus()
+  });
+});
+
+/**
+ * Update central connection config (admin only)
+ */
+app.post("/api/central/configure", requireAdmin, async (req, res) => {
+  try {
+    const { enabled, apiKey, centralUrl, autoConnect } = req.body;
+    
+    // Update config file
+    if (apiKey !== undefined) {
+      config.centralManagement.apiKey = apiKey;
+    }
+    if (centralUrl !== undefined) {
+      config.centralManagement.centralUrl = centralUrl;
+    }
+    if (enabled !== undefined) {
+      config.centralManagement.enabled = enabled;
+    }
+    if (autoConnect !== undefined) {
+      config.centralManagement.autoConnect = autoConnect;
+    }
+    
+    saveConfig();
+    
+    // Update connector
+    centralConnector.updateConfig(config.centralManagement);
+    
+    res.json({ success: true, status: centralConnector.getStatus() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Connect to central server (admin only)
+ */
+app.post("/api/central/connect", requireAdmin, async (req, res) => {
+  try {
+    await centralConnector.connect();
+    res.json({ success: true, status: centralConnector.getStatus() });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Disconnect from central server (admin only)
+ */
+app.post("/api/central/disconnect", requireAdmin, (req, res) => {
+  centralConnector.disconnect();
+  res.json({ success: true, status: centralConnector.getStatus() });
+});
 
 /**
  * Dashboard overview
  */
-app.get("/api/dashboard", async (req, res) => {
+app.get("/api/dashboard", requireAuth, async (req, res) => {
   try {
     const [services, system, network, prpcHealth] = await Promise.all([
       ServiceManager.getStatusSummary(),
@@ -95,7 +480,7 @@ app.get("/api/dashboard", async (req, res) => {
 /**
  * Get all service statuses
  */
-app.get("/api/services", async (req, res) => {
+app.get("/api/services", requireAuth, async (req, res) => {
   try {
     const statuses = await ServiceManager.getAllStatus();
     res.json({ success: true, services: statuses });
@@ -107,7 +492,7 @@ app.get("/api/services", async (req, res) => {
 /**
  * Get single service status
  */
-app.get("/api/services/:name", async (req, res) => {
+app.get("/api/services/:name", requireAuth, async (req, res) => {
   try {
     const status = await ServiceManager.getStatus(req.params.name);
     res.json({ success: true, service: status });
@@ -119,7 +504,7 @@ app.get("/api/services/:name", async (req, res) => {
 /**
  * Control a service (start/stop/restart)
  */
-app.post("/api/services/:name/:action", async (req, res) => {
+app.post("/api/services/:name/:action", requireAdminOrStandard, async (req, res) => {
   if (!config.security.enableServiceControl) {
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
@@ -138,7 +523,7 @@ app.post("/api/services/:name/:action", async (req, res) => {
 /**
  * Restart all services
  */
-app.post("/api/services/restart-all", async (req, res) => {
+app.post("/api/services/restart-all", requireAdminOrStandard, async (req, res) => {
   if (!config.security.enableServiceControl) {
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
@@ -154,10 +539,13 @@ app.post("/api/services/restart-all", async (req, res) => {
 /**
  * Get logs for a service
  */
-app.get("/api/logs/:service", async (req, res) => {
+app.get("/api/logs/:service", requireAuth, async (req, res) => {
   try {
     const lines = parseInt(req.query.lines) || 50;
     const filter = req.query.filter || null;
+    
+    // Set longer timeout for large log requests
+    req.setTimeout(30000); // 30 seconds
     
     const logs = await LogManager.getLogs(req.params.service, lines, filter);
     res.json(logs);
@@ -169,7 +557,7 @@ app.get("/api/logs/:service", async (req, res) => {
 /**
  * Find pubkey (restart pod and extract from logs)
  */
-app.post("/api/find-pubkey", async (req, res) => {
+app.post("/api/find-pubkey", requireAdminOrStandard, async (req, res) => {
   try {
     const result = await LogManager.findPubkey();
     res.json(result);
@@ -181,7 +569,7 @@ app.post("/api/find-pubkey", async (req, res) => {
 /**
  * pRPC API calls
  */
-app.post("/api/prpc/:method", async (req, res) => {
+app.post("/api/prpc/:method", requireAuth, async (req, res) => {
   try {
     const method = req.params.method;
     const params = req.body.params || {};
@@ -199,6 +587,9 @@ app.post("/api/prpc/:method", async (req, res) => {
       case "get-pods":
         result = await PRPCClient.getPods();
         break;
+      case "get-pods-with-stats":
+        result = await PRPCClient.getPodsWithStats();
+        break;
       default:
         // Custom method
         result = await PRPCClient.customCall(method, params);
@@ -213,7 +604,7 @@ app.post("/api/prpc/:method", async (req, res) => {
 /**
  * Network diagnostics
  */
-app.get("/api/network", async (req, res) => {
+app.get("/api/network", requireAuth, async (req, res) => {
   try {
     const diagnostics = await NetworkManager.runDiagnostics();
     res.json({ success: true, diagnostics });
@@ -225,890 +616,10 @@ app.get("/api/network", async (req, res) => {
 /**
  * System stats
  */
-app.get("/api/system", async (req, res) => {
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
+app.get("/api/system", requireAuth, async (req, res) => {
   try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
-  try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
     const stats = await SystemMonitor.getAllStats();
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
-  try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
     res.json({ success: true, stats });
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
-  try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  } catch (error) {
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
-  try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-    res.status(500).json({ success: false, error: error.message });
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
-  try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  }
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
-  try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-});
-
-// Xandeum disk space endpoint
-app.get("/api/xandeum-space", async (req, res) => {
-
-// Devnet eligibility check endpoint
-app.get("/api/devnet-eligibility", async (req, res) => {
-  try {
-    const axios = require("axios");
-    
-    // Fetch all pod credits
-    const response = await axios.get("https://podcredits.xandeum.network/api/pods-credits");
-    const allPods = response.data;
-    
-    if (!allPods || !Array.isArray(allPods)) {
-      return res.status(500).json({ success: false, error: "Invalid API response" });
-    }
-    
-    // Extract credits values and sort
-    const creditsValues = allPods.map(pod => pod.credits || 0).sort((a, b) => b - a);
-    
-    // Calculate statistics
-    const highest = creditsValues[0] || 0;
-    const percentile95Index = Math.floor(creditsValues.length * 0.05);
-    const percentile95 = creditsValues[percentile95Index] || 0;
-    const threshold = percentile95 * 0.8;
-    
-    // Find current pod (if available)
-    // This would need the pod public key - you may need to adjust based on how to identify your pod
-    let currentPodCredits = null;
-    let isEligible = false;
-    
-    res.json({
-      success: true,
-      devnet: {
-        highest: highest,
-        percentile95: percentile95,
-        threshold: threshold,
-        currentPod: currentPodCredits,
-        eligible: isEligible,
-        totalPods: creditsValues.length,
-        calculation: `80% of 95th percentile: ${percentile95.toFixed(2)} × 0.8 = ${threshold.toFixed(2)}`
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-  try {
-    const { execSync } = require("child_process");
-    
-    // Calculate disk space for Xandeum components
-    let xandminerSize = 0;
-    let xandminerdSize = 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    let podSize = 0;
-    
-    try {
-      const xandminerOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminer 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerSize = parseInt(xandminerOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    try {
-      const xandminerdOutput = execSync("du -sb /root/xandminer /root/.xandeum 2>/dev/null | grep xandminerd 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandminerdSize = parseInt(xandminerdOutput.split("	")[0]) || 0;
-    
-    // Check for xandeum data directory
-    let xandeumDataSize = 0;
-    try {
-      const xandeumDataOutput = execSync("du -sb /root/.xandeum 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumDataSize = parseInt(xandeumDataOutput.split("\t")[0]) || 0;
-    } catch (e) {}
-    } catch (e) {}
-    
-    try {
-      const podOutput = execSync("dpkg -L pod 2>/dev/null | xargs du -cb 2>/dev/null | tail -1 || echo 0", { encoding: "utf-8" });
-      podSize = parseInt(podOutput.split("	")[0]) || 0;
-    } catch (e) {}
-    
-    
-    // Track xandeum-pages file
-    let xandeumPagesSize = 0;
-    try {
-      const pagesOutput = execSync("stat -c%s /xandeum-pages 2>/dev/null || echo 0", { encoding: "utf-8" });
-      xandeumPagesSize = parseInt(pagesOutput.trim()) || 0;
-    } catch (e) {}
-    
-    const totalBytes = xandminerSize + xandminerdSize + podSize + xandeumPagesSize;
-    const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
-    const totalGB = (totalBytes / 1024 / 1024 / 1024).toFixed(2);
-    
-    res.json({
-      success: true,
-      xandeum: {
-        xandminer: { bytes: xandminerSize, mb: (xandminerSize / 1024 / 1024).toFixed(2) },
-        xandminerd: { bytes: xandminerdSize, mb: (xandminerdSize / 1024 / 1024).toFixed(2) },
-        pod: { bytes: podSize, mb: (podSize / 1024 / 1024).toFixed(2) },
-        xandeumPages: { bytes: xandeumPagesSize, mb: (xandeumPagesSize / 1024 / 1024).toFixed(2), gb: (xandeumPagesSize / 1024 / 1024 / 1024).toFixed(2) },
-        total: { bytes: totalBytes, mb: totalMB, gb: totalGB }
-      }
-    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -1117,7 +628,7 @@ app.get("/api/devnet-eligibility", async (req, res) => {
 /**
  * Health check
  */
-app.get("/api/health", async (req, res) => {
+app.get("/api/health", requireAuth, async (req, res) => {
   try {
     const [systemHealth, serviceStatus] = await Promise.all([
       SystemMonitor.getHealthStatus(),
@@ -1145,16 +656,6 @@ app.get("/api/health", async (req, res) => {
  * Get terminal activity log
  */
 app.get("/api/terminal/activity", (req, res) => {
-
-// TMUX status endpoint
-app.get('/api/tmux-status', (req, res) => {
-  try {
-    const status = terminalManager.getTmuxStatus();
-    res.json(status);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
   const limit = parseInt(req.query.limit) || 100;
   const log = terminalManager.getActivityLog(limit);
   res.json({ success: true, log });
@@ -1164,7 +665,75 @@ app.get('/api/tmux-status', (req, res) => {
 // WEBSOCKET TERMINAL HANDLER
 // ============================================================================
 
-wss.on("connection", (ws) => {
+/**
+ * Passive pubkey lookup (no restart)
+ */
+app.get("/api/pod-pubkey", requireAuth, async (req, res) => {
+  try {
+    const result = await LogManager.getPubkeyPassive();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Credits: fetch global list and local credits (if pubkey known)
+ */
+app.get("/api/pod-credits", requireAuth, async (req, res) => {
+  try {
+    const [creditsResp, pubkeyResult] = await Promise.all([
+      axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
+      LogManager.getPubkeyPassive()
+    ]);
+
+    const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];
+    const pubkey = pubkeyResult.pubkey || null;
+    const local = pubkey ? list.find(p => p.pod_id === pubkey) : null;
+
+    res.json({
+      success: true,
+      pubkey,
+      credits: local ? local.credits : null,
+      list
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * DevNet eligibility (95th percentile * 0.8 threshold)
+ */
+app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {  try {    const [creditsResp, pubkeyResult] = await Promise.all([
+      axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
+      LogManager.getPubkeyPassive()
+    ]);
+    const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];    const creditsOnly = list.map(p => p.credits).filter(c => typeof c === "number").sort((a, b) => a - b);
+    const count = creditsOnly.length;
+    const p95 = count > 0 ? creditsOnly[Math.floor(0.95 * (count - 1))] : null;
+    const threshold = p95 !== null ? Math.round(p95 * 0.8) : null;
+    const maxCredits = count > 0 ? creditsOnly[count - 1] : null;
+
+    const pubkey = pubkeyResult.pubkey || null;
+    const localEntry = pubkey ? list.find(p => p.pod_id === pubkey) : null;
+    const localCredits = localEntry ? localEntry.credits : null;    const eligible = threshold !== null && localCredits !== null ? localCredits >= threshold : null;
+
+    res.json({
+      success: true,
+      pubkey,
+      localCredits,
+      percentile95: p95,
+      threshold,
+      maxCredits,
+      eligible,
+      totalPods: count
+    });
+  } catch (error) {    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+wss.on("connection", (ws, req) => {
   if (!config.security.enableTerminal) {
     ws.close(1008, "Terminal access is disabled");
     return;
@@ -1172,43 +741,55 @@ wss.on("connection", (ws) => {
   
   const sessionId = generateSessionId();
   let ptyProcess = null;
+  let sessionCreated = false;
   
   console.log(`[Terminal] New connection: ${sessionId}`);
-  
-  try {
-    ptyProcess = terminalManager.createSession(sessionId);
-    
-    // Send data from PTY to WebSocket
-    ptyProcess.on("data", (data) => {
-      try {
-        ws.send(data);
-      } catch (error) {
-        console.error(`[Terminal] Error sending data: ${error.message}`);
-      }
-    });
-    
-    // Handle PTY exit
-    ptyProcess.on("exit", () => {
-      console.log(`[Terminal] PTY exited: ${sessionId}`);
-      terminalManager.destroySession(sessionId);
-      ws.close();
-    });
-    
-  } catch (error) {
-    console.error(`[Terminal] Error creating session: ${error.message}`);
-    ws.send(`Error: ${error.message}\r\n`);
-    ws.close();
-    return;
-  }
   
   // Handle incoming data from WebSocket
   ws.on("message", (data) => {
     try {
       const message = JSON.parse(data);
       
-      if (message.type === "input") {
+      // Handle auth message - create session with correct role
+      if (message.type === "auth" && !sessionCreated) {
+        const userRole = message.role || 'admin';
+        
+        try {
+          ptyProcess = terminalManager.createSession(sessionId, 80, 24, userRole);
+          sessionCreated = true;
+          
+          // Send data from PTY to WebSocket
+          ptyProcess.on("data", (data) => {
+            try {
+              if (ws.readyState === 1) { // OPEN
+                ws.send(data);
+              }
+            } catch (error) {
+              console.error(`[Terminal] Error sending data: ${error.message}`);
+            }
+          });
+          
+          // Handle PTY exit
+          ptyProcess.on("exit", () => {
+            console.log(`[Terminal] PTY exited: ${sessionId}`);
+            terminalManager.closeSession(sessionId);
+            if (ws.readyState === 1) {
+              ws.close();
+            }
+          });
+          
+          console.log(`[Terminal] Session created for role: ${userRole}`);
+        } catch (error) {
+          console.error(`[Terminal] Error creating session: ${error.message}`);
+          ws.send(`Error: ${error.message}\r\n`);
+          ws.close();
+        }
+        return;
+      }
+      
+      if (message.type === "input" && sessionCreated) {
         terminalManager.writeToSession(sessionId, message.data);
-      } else if (message.type === "resize") {
+      } else if (message.type === "resize" && sessionCreated) {
         terminalManager.resizeSession(sessionId, message.cols, message.rows);
       }
     } catch (error) {
@@ -1219,13 +800,13 @@ wss.on("connection", (ws) => {
   // Handle WebSocket close
   ws.on("close", () => {
     console.log(`[Terminal] Connection closed: ${sessionId}`);
-    terminalManager.destroySession(sessionId);
+    terminalManager.closeSession(sessionId);
   });
   
   // Handle WebSocket error
   ws.on("error", (error) => {
     console.error(`[Terminal] WebSocket error: ${error.message}`);
-    terminalManager.destroySession(sessionId);
+    terminalManager.closeSession(sessionId);
   });
 });
 
@@ -1250,7 +831,7 @@ const PORT = config.server.port;
 server.listen(PORT, HOST, () => {
   console.log("");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("  Xandeum Pod Monitor");
+  console.log("  Xandeum Pod Manager (Pod-Man)");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("");
   console.log(`  Server:    http://${HOST}:${PORT}`);
@@ -1266,6 +847,12 @@ server.listen(PORT, HOST, () => {
   console.log("");
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("");
+  
+  // Connect to central management server if enabled
+  if (config.centralManagement && config.centralManagement.enabled && config.centralManagement.autoConnect) {
+    console.log("[Central] Auto-connecting to central management server...");
+    centralConnector.connect();
+  }
 });
 
 // Handle graceful shutdown

@@ -136,62 +136,36 @@ class LogManager {
   /**
    * Get pubkey without restarting the pod service (passive scan)
    */
-    /**
-   * Get pubkey without restarting the pod service (passive scan)
-   */
   static async getPubkeyPassive() {
-    const fs = require("fs");
-    const path = require("path");
-    const configFile = "/root/pod-man/config.json";
-    const cacheFile = "/tmp/xpm_pubkey_cache.txt";
+    const fs = require('fs');
+    const cacheFile = '/tmp/xpm_pubkey_cache.txt';
     
-    // 1. Check config.json first (persistent storage)
-    try {
-      if (fs.existsSync(configFile)) {
-        const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
-        if (config.pubkey && config.pubkey.length >= 32) {
-          return { success: true, pubkey: config.pubkey, lines: [], cached: true, source: "config" };
-        }
-      }
-    } catch (e) {}
-    
-    // 2. Try file cache
+    // Try file cache first
     try {
       if (fs.existsSync(cacheFile)) {
-        const cached = fs.readFileSync(cacheFile, "utf8").trim();
+        const cached = fs.readFileSync(cacheFile, 'utf8').trim();
         if (cached && cached.length >= 32) {
-          // Also save to config.json for persistence
-          try {
-            const config = fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile, "utf8")) : {};
-            config.pubkey = cached;
-            fs.writeFileSync(configFile, JSON.stringify(config, null, 2), "utf8");
-          } catch (e) {}
-          return { success: true, pubkey: cached, lines: [], cached: true, source: "cache" };
+          return { success: true, pubkey: cached, lines: [], cached: true };
         }
       }
     } catch (e) {}
     
-    // 3. Scan logs (reduced from 20000 to 1000 lines for performance)
+    // Scan logs
     try {
       const { stdout } = await execPromise(
-        "journalctl -u pod.service --no-pager --lines=1000 | grep -i pubkey"
+        "journalctl -u pod.service --no-pager --lines=20000 | grep -i pubkey"
       );
       const lines = stdout.split("\n").filter(l => l.trim());
       const pk = this.extractPubkeyFromLines(lines);
       if (pk) {
-        // Save to both cache and config.json
         try {
-          fs.writeFileSync(cacheFile, pk, "utf8");
-          const config = fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile, "utf8")) : {};
-          config.pubkey = pk;
-          fs.writeFileSync(configFile, JSON.stringify(config, null, 2), "utf8");
+          fs.writeFileSync(cacheFile, pk, 'utf8');
         } catch (e) {}
       }
       return {
         success: true,
         lines,
-        pubkey: pk,
-        source: pk ? "logs" : null
+        pubkey: pk
       };
     } catch (error) {
       return {

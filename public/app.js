@@ -72,7 +72,8 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeAutoRefresh();
     initReadOnlyToggle();
     loadMetricsCache();
-    loadDashboard();
+    loadDashboard()
+    loadCurrentPubkey();;
     
     // Setup log service selector
     const logService = document.getElementById('log-service');
@@ -275,6 +276,40 @@ async function logout() {
 // DASHBOARD
 // ============================================================================
 
+
+// Load component versions
+async function loadVersions() {
+    try {
+        const response = await fetch("/api/prpc/get-version", { method: "POST" });
+        const data = await response.json();
+        
+        if (data.success && data.result && data.result.version) {
+            const version = data.result.version;
+            // All components use the same version from pod
+            const versionEl = document.getElementById("version-xandminer");
+            const versionEl2 = document.getElementById("version-xandminerd");
+            const versionEl3 = document.getElementById("version-pod");
+            
+            if (versionEl) versionEl.textContent = version;
+            if (versionEl2) versionEl2.textContent = version;
+            if (versionEl3) versionEl3.textContent = version;
+        } else {
+            // Set to "Unknown" if failed
+            ["version-xandminer", "version-xandminerd", "version-pod"].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = "Unknown";
+            });
+        }
+    } catch (error) {
+        console.error("Error loading versions:", error);
+        ["version-xandminer", "version-xandminerd", "version-pod"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = "Error";
+        });
+    }
+}
+
+
 async function loadDashboard() {
     try {
         const response = await fetch('/api/dashboard');
@@ -285,6 +320,7 @@ async function loadDashboard() {
             updateServiceStatus(data.services);
             updateNetworkStatus(data.network);
             updateHealthScore(data);
+            await loadVersions();
             
             // Load credits but don't block metrics recording if it fails
             let creditsVal = null;
@@ -693,7 +729,7 @@ function updateAPIFormat(method, params = {}) {
     const ip = state.cachedIP || 'YOUR_PUBLIC_IP';
     const curlCmd = `curl -X POST http://${ip}:6000/rpc \\
   -H "Content-Type: application/json" \\
-  -d '${JSON.stringify(payload, null, 2)}'`;
+  -d '${JSON.stringify(payload, null, 2)}' | jq`;
     el.textContent = curlCmd;
     
     // Refresh IP in background if not cached
@@ -893,26 +929,94 @@ async function loadLogs() {
     }
 }
 
-async function findPubkey() {
-    const container = document.getElementById('logs-output');
-    container.innerHTML = '<p>Scanning pod logs for pubkey (20,000 lines)...</p>';
+// Manual pubkey management
+async function saveManualPubkey() {
+    const input = document.getElementById("manual-pubkey-input");
+    const status = document.getElementById("pubkey-status");
+    if (!input || !status) return;
+    
+    const pubkey = input.value.trim();
+    if (!pubkey) {
+        status.textContent = "Please enter a pubkey";
+        status.style.color = "var(--danger-color)";
+        return;
+    }
+    
+    // Validate format (base58, 32-44 chars)
+    const pubkeyRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+    if (!pubkeyRegex.test(pubkey)) {
+        status.textContent = "Invalid pubkey format (must be base58, 32-44 characters)";
+        status.style.color = "var(--danger-color)";
+        return;
+    }
+    
+    status.textContent = "Saving...";
+    status.style.color = "var(--text-secondary)";
     
     try {
-        const response = await fetch('/api/pod-pubkey');
-        const data = await response.json();
+        const resp = await fetch("/api/save-pubkey", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pubkey })
+        });
         
+        const data = await resp.json();
         if (data.success) {
-            if (data.pubkey) {
-                const cached = data.cached ? ' (from cache)' : '';
-                container.innerHTML = `<p style="color: var(--success-color); font-size: 16px;"><strong>Pubkey Found${cached}:</strong> ${data.pubkey}</p>\n\n` + (data.lines.length > 0 ? data.lines.join('\n') : 'Retrieved from cache.');
-            } else {
-                container.innerHTML = '<p style="color: var(--warning-color);">Pubkey not found in logs. Try restarting pod service via Services tab.</p>';
-            }
+            const shortPubkey = pubkey.substring(0, 8) + "..." + pubkey.substring(pubkey.length - 8);
+            status.textContent = "✓ Pubkey saved: " + shortPubkey;
+            status.style.color = "var(--success-color)";
+            input.value = "";
+            // Refresh credits
+            await loadDashboardCredits();
         } else {
-            container.innerHTML = `<p style="color: var(--danger-color);">Error: ${data.error}</p>`;
+            status.textContent = "Error: " + (data.error || "Failed to save");
+            status.style.color = "var(--danger-color)";
         }
-    } catch (error) {
-        container.innerHTML = `<p style="color: var(--danger-color);">Error: ${error.message}</p>`;
+    } catch (err) {
+        status.textContent = "Error: " + err.message;
+        status.style.color = "var(--danger-color)";
+    }
+}
+
+// Load and display current pubkey on page load
+async function loadCurrentPubkey() {
+    const status = document.getElementById("pubkey-status");
+    if (!status) return;
+    
+    try {
+        const resp = await fetch("/api/pod-pubkey");
+        const data = await resp.json();
+        if (data.success && data.pubkey) {
+            const shortPubkey = data.pubkey.substring(0, 8) + "..." + data.pubkey.substring(data.pubkey.length - 8);
+            status.textContent = "Current pubkey: " + shortPubkey + " (" + (data.source || "unknown source") + ")";
+            status.style.color = "var(--text-secondary)";
+        } else {
+            status.textContent = "No pubkey found. Use Find Pubkey or paste manually.";
+            status.style.color = "var(--text-secondary)";
+        }
+    } catch (err) {
+        // Silently fail - pubkey status is optional
+    }
+}
+
+
+async function findPubkey() {
+    if (guardDangerous()) return;
+    const out = document.getElementById("eligibility-output");
+    if (out) out.textContent = "Restarting pod to rescan pubkey...";
+    try {
+        const resp = await fetch("/api/find-pubkey", { method: "POST" });
+        const data = await resp.json();
+        if (data.success && data.pubkey) {
+            if (out) out.textContent = "Pubkey found: " + data.pubkey + ". Refreshing credits...";
+            // Refresh pubkey status display
+            await loadCurrentPubkey();
+            await loadDashboardCredits();
+        } else {
+            if (out) out.textContent = "Pubkey not found in recent logs.";
+        }
+    } catch (err) {
+        if (out) out.textContent = "Error scanning pubkey: " + err.message;
     }
 }
 
