@@ -28,8 +28,8 @@ if (!config.authentication.sessionSecret) {
 }
 
 
-// Initialize Central Connector
-const centralConnector = new CentralConnector(config.centralManagement || {});
+// Initialize Central Connector (pass server config for dynamic pod-man port)
+const centralConnector = new CentralConnector(config.centralManagement || {}, config.server || {});
 
 // Initialize Express app
 const app = express();
