@@ -1,0 +1,50 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 7000
+  },
+  "security": {
+    "enableServiceControl": true,
+    "enableTerminal": true,
+    "dangerousCommandWarnings": true,
+    "confirmDestructiveActions": true,
+    "rateLimit": {
+      "enabled": true,
+      "maxRequestsPerMinute": 60
+    }
+  },
+  "services": [
+    "xandminer",
+    "xandminerd",
+    "pod"
+  ],
+  "prpc": {
+    "host": "127.0.0.1",
+    "port": 6000
+  },
+  "terminal": {
+    "shell": "/bin/bash",
+    "maxSessions": 3,
+    "dangerousCommands": [
+      "rm -rf /",
+      "dd if=",
+      "mkfs",
+      ":(){ :|:& };:",
+      "> /dev/sda",
+      "chmod -R 777 /"
+    ]
+  },
+  "authentication": {
+    "enabled": false,
+    "sessionSecret": "",
+    "sessionTimeout": 86400000,
+    "users": []
+  },
+  "centralManagement": {
+    "enabled": false,
+    "apiKey": "",
+    "centralUrl": "",
+    "autoConnect": false,
+    "metricsInterval": 30000
+  }
+}
