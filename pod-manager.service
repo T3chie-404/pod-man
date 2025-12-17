@@ -5,8 +5,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/pod-man
-ExecStart=/usr/bin/node /root/pod-man/server.js
+WorkingDirectory=INSTALL_DIR_PLACEHOLDER
+ExecStart=/usr/bin/node INSTALL_DIR_PLACEHOLDER/server.js
 Restart=always
 RestartSec=10
 StandardOutput=journal
