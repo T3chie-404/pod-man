@@ -24,6 +24,16 @@ fi
 # Detect installation directory
 INSTALL_DIR="/root/pod-man"
 
+# Check if we're already in the pod-man directory with all files
+CURRENT_DIR=$(pwd)
+if [ -f "./package.json" ] && [ -f "./server.js" ] && [ -f "./config.json.example" ]; then
+    echo -e "${GREEN}✓${NC} Running installer from pod-man directory"
+    INSTALL_DIR="$CURRENT_DIR"
+    SKIP_CLONE=true
+else
+    SKIP_CLONE=false
+fi
+
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BLUE}  Step 1: Checking Dependencies${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -53,22 +63,24 @@ fi
 
 # Check git
 if ! command -v git &> /dev/null; then
-    echo -e "${YELLOW}! git not found, installing...${NC}"
+    echo -e "${RED}✗ git not found, installing...${NC}"
     apt-get update
     apt-get install -y git
     echo -e "${GREEN}✓${NC} git installed"
 else
-    echo -e "${GREEN}✓${NC} git $(git --version | cut -d' ' -f3)"
+    echo -e "${GREEN}✓${NC} git installed"
 fi
 
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  Step 2: Installing Pod Manager${NC}"
+echo -e "${BLUE}  Step 2: Getting Pod Manager${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
 # Clone or update repository
-if [ -d "$INSTALL_DIR" ]; then
+if [ "$SKIP_CLONE" = true ]; then
+    echo -e "${GREEN}✓${NC} Using current directory: $INSTALL_DIR"
+elif [ -d "$INSTALL_DIR" ]; then
     echo "Directory already exists at $INSTALL_DIR"
     echo ""
     echo "Options:"
@@ -83,7 +95,7 @@ if [ -d "$INSTALL_DIR" ]; then
     if [[ "$UPDATE_CHOICE" =~ ^[Uu]$ ]]; then
         echo "Updating from GitHub..."
         git fetch origin
-        git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
+        git reset --hard origin/master
         echo -e "${GREEN}✓${NC} Updated to latest version"
     else
         echo -e "${YELLOW}!${NC} Keeping local version"
@@ -95,6 +107,22 @@ else
     echo -e "${GREEN}✓${NC} Repository cloned"
 fi
 
+cd "$INSTALL_DIR"
+
+# Check if config.json exists, if not copy from example
+if [ ! -f "config.json" ]; then
+    if [ -f "config.json.example" ]; then
+        echo "Copying config.json.example to config.json..."
+        cp config.json.example config.json
+        echo -e "${GREEN}✓${NC} config.json created"
+    else
+        echo -e "${RED}✗ config.json.example not found!${NC}"
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✓${NC} config.json already exists"
+fi
+
 # Install dependencies
 echo "Installing dependencies..."
 npm install --production
@@ -102,67 +130,42 @@ echo -e "${GREEN}✓${NC} Dependencies installed"
 
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  Step 3: Setting up System Service${NC}"
+echo -e "${BLUE}  Step 3: Setting Up Service${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# Stop existing service if running
-if systemctl is-active --quiet pod-manager; then
-    systemctl stop pod-manager
-    echo -e "${YELLOW}!${NC} Stopped existing service"
+# Install systemd service
+if [ -f "pod-manager.service" ]; then
+    cp pod-manager.service /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable pod-manager
+    echo -e "${GREEN}✓${NC} Service installed and enabled"
+else
+    echo -e "${RED}✗ pod-manager.service not found!${NC}"
+    exit 1
 fi
-
-# Copy service file
-cp "$INSTALL_DIR/pod-manager.service" /etc/systemd/system/
-echo -e "${GREEN}✓${NC} Service file installed"
-
-# Reload systemd
-systemctl daemon-reload
-echo -e "${GREEN}✓${NC} Systemd reloaded"
-
-# Enable service
-systemctl enable pod-manager
-echo -e "${GREEN}✓${NC} Service enabled (starts on boot)"
 
 # Start service
 systemctl start pod-manager
-sleep 2
-
-# Check if service started
-if systemctl is-active --quiet pod-manager; then
-    echo -e "${GREEN}✓${NC} Service started successfully"
-else
-    echo -e "${RED}✗ Service failed to start${NC}"
-    echo "  Check logs: sudo journalctl -u pod-manager -n 50"
-    exit 1
-fi
+echo -e "${GREEN}✓${NC} Service started"
 
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}  Installation Complete!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo "Xandeum Pod Manager is now running!"
+echo "  Pod Manager is now running!"
 echo ""
-echo -e "${YELLOW}Access URLs:${NC}"
-echo "  • Local:  http://127.0.0.1:7000"
-SERVER_IP=$(hostname -I | awk '{print $1}')
-if [ -n "$SERVER_IP" ]; then
-    echo "  • SSH Tunnel: ssh -L 7000:localhost:7000 user@${SERVER_IP}"
-fi
+echo "  Access it at: http://127.0.0.1:7000"
 echo ""
-echo -e "${YELLOW}Service Commands:${NC}"
-echo "  • Status:  sudo systemctl status pod-manager"
-echo "  • Stop:    sudo systemctl stop pod-manager"
-echo "  • Start:   sudo systemctl start pod-manager"
-echo "  • Restart: sudo systemctl restart pod-manager"
-echo "  • Logs:    sudo journalctl -u pod-manager -f"
+echo "  First-time setup: Visit the URL above to create your admin account"
 echo ""
-echo -e "${YELLOW}Optional: Enable HTTPS${NC}"
-echo "  • Run: sudo bash $INSTALL_DIR/setup-https.sh"
-if [ -n "$SERVER_IP" ]; then
-    echo "  • Access via: https://${SERVER_IP}:443"
-fi
+echo "  Remote access: ssh -L 7000:localhost:7000 user@your-server"
 echo ""
-echo -e "${GREEN}Enjoy managing your Xandeum pNode! ⚡${NC}"
+echo "  Service commands:"
+echo "    sudo systemctl status pod-manager"
+echo "    sudo systemctl restart pod-manager"
+echo "    sudo journalctl -u pod-manager -f"
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
