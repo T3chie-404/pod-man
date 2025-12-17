@@ -70,18 +70,15 @@ Interactive web-based monitoring and management dashboard for Xandeum pNodes. Mo
 ```bash
 git clone https://github.com/T3chie-404/pod-man.git
 cd pod-man
-
-# Copy example config
-cp config.json.example config.json
-
-# Install dependencies
-npm install
-
-# Install as system service
-sudo cp pod-manager.service /etc/systemd/system/
-sudo systemctl enable pod-manager
-sudo systemctl start pod-manager
+sudo bash install.sh
 ```
+
+The installer will:
+- Check and install dependencies (Node.js, npm, git)
+- Copy config.json.example to config.json
+- Install npm packages
+- Create and enable systemd service
+- Start Pod Manager on port 7000
 
 ### First-Time Setup
 
