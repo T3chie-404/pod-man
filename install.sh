@@ -137,7 +137,7 @@ echo ""
 # Install systemd service
 if [ -f "pod-manager.service" ]; then
   # Replace placeholder with actual install directory
-  sed "s|INSTALL_DIR_PLACEHOLDER||g" pod-manager.service > /tmp/pod-manager.service.tmp
+  sed "s|INSTALL_DIR_PLACEHOLDER|$INSTALL_DIR|g" pod-manager.service > /tmp/pod-manager.service.tmp
   cp /tmp/pod-manager.service.tmp /etc/systemd/system/pod-manager.service
   rm /tmp/pod-manager.service.tmp
     systemctl daemon-reload
