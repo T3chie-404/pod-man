@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const axios = require("axios");
 const session = require("express-session");
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 
 // Import our library modules
@@ -18,6 +19,14 @@ const CentralConnector = require("./lib/central/central-connector");
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+
+// Generate session secret if empty (for first-time setup)
+if (!config.authentication.sessionSecret) {
+  config.authentication.sessionSecret = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync("./config.json", JSON.stringify(config, null, 2), "utf8");
+  console.log("✓ Generated session secret");
+}
+
 
 // Initialize Central Connector
 const centralConnector = new CentralConnector(config.centralManagement || {});
