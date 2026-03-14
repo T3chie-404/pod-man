@@ -73,6 +73,9 @@ cd pod-man
 sudo bash install.sh
 ```
 
+The installer deploys Pod-Man to `/root/pod-man` and creates `pod-manager.service` to run as `root`.
+This is the expected runtime model for the current implementation because service management, root-shell admin terminal access, and related system integrations depend on root-owned paths and privileges.
+
 The installer will:
 - Check and install dependencies (Node.js, npm, git)
 - Copy config.json.example to config.json

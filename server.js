@@ -49,7 +49,8 @@ const wss = new WebSocket.Server({
 app.use(express.json({ limit: '10mb' }));
 
 // Session middleware for authentication
-app.use(session({
+const sessionMiddleware = session({
+  name: "pod-man.sid",
   secret: config.authentication.sessionSecret,
   resave: false,
   saveUninitialized: false,
@@ -58,7 +59,8 @@ app.use(session({
     httpOnly: true,
     secure: false // Set to true if using HTTPS
   }
-}));
+});
+app.use(sessionMiddleware);
 app.use(express.static("public"));
 
 // Rate limiting (simple in-memory implementation)
@@ -104,6 +106,30 @@ app.use(checkRateLimit);
 // Save config to file
 function saveConfig() {
   fs.writeFileSync("./config.json", JSON.stringify(config, null, 2), "utf8");
+}
+
+function getCentralHttpBaseUrl() {
+  const centralUrl = config.centralManagement?.centralUrl;
+
+  if (!centralUrl) {
+    throw new Error("Central URL is not configured");
+  }
+
+  const parsed = new URL(centralUrl);
+  parsed.protocol = parsed.protocol === "wss:" ? "https:" : "http:";
+  parsed.pathname = "";
+  parsed.search = "";
+  parsed.hash = "";
+
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function setAuthenticatedSession(req, sessionUser) {
+  req.session.username = sessionUser.username;
+  req.session.role = sessionUser.role;
+  req.session.centralUserId = sessionUser.userId || null;
+  req.session.centralEmail = sessionUser.email || null;
+  req.session.ssoAuthenticated = Boolean(sessionUser.ssoAuthenticated);
 }
 
 // Auth middleware
@@ -296,6 +322,68 @@ app.get("/api/check-session", (req, res) => {
       success: true,
       authenticated: false
     });
+  }
+});
+
+/**
+ * Central SSO callback
+ */
+app.get("/sso/central", async (req, res) => {
+  const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
+
+  if (!config.centralManagement?.enabled || !config.centralManagement?.apiKey) {
+    return res.status(503).send("Central SSO is not configured on this pNode.");
+  }
+
+  if (!token) {
+    return res.status(400).send("Missing SSO token.");
+  }
+
+  if (!centralConnector.pnodeId) {
+    return res.status(503).send("This pNode is not registered with Central yet.");
+  }
+
+  try {
+    console.log(`[Central-SSO] Callback start: pnode=${centralConnector.pnodeId} token=${token.slice(0, 12)}...`);
+    const centralBaseUrl = getCentralHttpBaseUrl();
+    const response = await axios.post(
+      `${centralBaseUrl}/api/internal/sso/consume`,
+      {
+        token,
+        pnodeId: centralConnector.pnodeId,
+        service: "pod-man"
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${config.centralManagement.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 10000
+      }
+    );
+
+    const sessionUser = response.data?.sessionUser;
+
+    if (!response.data?.success || !sessionUser?.username || !sessionUser?.role) {
+      console.error("[Central-SSO] Rejecting session: invalid session user payload");
+      return res.status(401).send("Central SSO was rejected.");
+    }
+
+    setAuthenticatedSession(req, sessionUser);
+    return req.session.save((error) => {
+      if (error) {
+        console.error("[Central-SSO] Failed to save session:", error.message);
+        return res.status(500).send("Failed to establish pod-man session.");
+      }
+
+      console.log(`[Central-SSO] Session established for ${sessionUser.username}`);
+      res.redirect("/");
+    });
+  } catch (error) {
+    const status = error.response?.status || 500;
+    const message = error.response?.data?.error || error.message;
+    console.error("[Central-SSO] Consume failed:", message);
+    return res.status(status).send(`Central SSO failed: ${message}`);
   }
 });
 
@@ -747,75 +835,82 @@ wss.on("connection", (ws, req) => {
     ws.close(1008, "Terminal access is disabled");
     return;
   }
-  
-  const sessionId = generateSessionId();
-  let ptyProcess = null;
-  let sessionCreated = false;
-  
-  console.log(`[Terminal] New connection: ${sessionId}`);
-  
-  // Handle incoming data from WebSocket
-  ws.on("message", (data) => {
-    try {
-      const message = JSON.parse(data);
-      
-      // Handle auth message - create session with correct role
-      if (message.type === "auth" && !sessionCreated) {
-        const userRole = message.role || 'admin';
-        
-        try {
-          ptyProcess = terminalManager.createSession(sessionId, 80, 24, userRole);
-          sessionCreated = true;
-          
-          // Send data from PTY to WebSocket
-          ptyProcess.on("data", (data) => {
-            try {
-              if (ws.readyState === 1) { // OPEN
-                ws.send(data);
-              }
-            } catch (error) {
-              console.error(`[Terminal] Error sending data: ${error.message}`);
-            }
-          });
-          
-          // Handle PTY exit
-          ptyProcess.on("exit", () => {
-            console.log(`[Terminal] PTY exited: ${sessionId}`);
-            terminalManager.closeSession(sessionId);
-            if (ws.readyState === 1) {
-              ws.close();
-            }
-          });
-          
-          console.log(`[Terminal] Session created for role: ${userRole}`);
-        } catch (error) {
-          console.error(`[Terminal] Error creating session: ${error.message}`);
-          ws.send(`Error: ${error.message}\r\n`);
-          ws.close();
-        }
-        return;
-      }
-      
-      if (message.type === "input" && sessionCreated) {
-        terminalManager.writeToSession(sessionId, message.data);
-      } else if (message.type === "resize" && sessionCreated) {
-        terminalManager.resizeSession(sessionId, message.cols, message.rows);
-      }
-    } catch (error) {
-      console.error(`[Terminal] Error processing message: ${error.message}`);
+
+  sessionMiddleware(req, {}, () => {
+    if (!req.session || !req.session.username) {
+      ws.close(1008, "Authentication required");
+      return;
     }
-  });
-  
-  // Handle WebSocket close
-  ws.on("close", () => {
-    console.log(`[Terminal] Connection closed: ${sessionId}`);
-    terminalManager.closeSession(sessionId);
-  });
-  
-  // Handle WebSocket error
-  ws.on("error", (error) => {
-    console.error(`[Terminal] WebSocket error: ${error.message}`);
-    terminalManager.closeSession(sessionId);
+
+    const sessionId = generateSessionId();
+    let ptyProcess = null;
+    let sessionCreated = false;
+
+    console.log(`[Terminal] New connection: ${sessionId}`);
+
+    // Handle incoming data from WebSocket
+    ws.on("message", (data) => {
+      try {
+        const message = JSON.parse(data);
+
+        // Create the terminal session from the authenticated server session only.
+        if (message.type === "auth" && !sessionCreated) {
+          const userRole = req.session.role || "demo";
+
+          try {
+            ptyProcess = terminalManager.createSession(sessionId, 80, 24, userRole);
+            sessionCreated = true;
+
+            // Send data from PTY to WebSocket
+            ptyProcess.on("data", (chunk) => {
+              try {
+                if (ws.readyState === 1) { // OPEN
+                  ws.send(chunk);
+                }
+              } catch (error) {
+                console.error(`[Terminal] Error sending data: ${error.message}`);
+              }
+            });
+
+            // Handle PTY exit
+            ptyProcess.on("exit", () => {
+              console.log(`[Terminal] PTY exited: ${sessionId}`);
+              terminalManager.closeSession(sessionId);
+              if (ws.readyState === 1) {
+                ws.close();
+              }
+            });
+
+            console.log(`[Terminal] Session created for role: ${userRole}`);
+          } catch (error) {
+            console.error(`[Terminal] Error creating session: ${error.message}`);
+            ws.send(`Error: ${error.message}\r\n`);
+            ws.close();
+          }
+          return;
+        }
+
+        if (message.type === "input" && sessionCreated) {
+          terminalManager.writeToSession(sessionId, message.data);
+        } else if (message.type === "resize" && sessionCreated) {
+          terminalManager.resizeSession(sessionId, message.cols, message.rows);
+        }
+      } catch (error) {
+        console.error(`[Terminal] Error processing message: ${error.message}`);
+      }
+    });
+
+    // Handle WebSocket close
+    ws.on("close", () => {
+      console.log(`[Terminal] Connection closed: ${sessionId}`);
+      terminalManager.closeSession(sessionId);
+    });
+
+    // Handle WebSocket error
+    ws.on("error", (error) => {
+      console.error(`[Terminal] WebSocket error: ${error.message}`);
+      terminalManager.closeSession(sessionId);
+    });
   });
 });
 
