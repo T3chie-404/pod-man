@@ -76,16 +76,42 @@ sudo bash install.sh
 The installer deploys Pod-Man to `/root/pod-man` and creates `pod-manager.service` to run as `root`.
 This is the expected runtime model for the current implementation because service management, root-shell admin terminal access, and related system integrations depend on root-owned paths and privileges.
 
-The installer will:
-- Check and install dependencies (Node.js, npm, git)
-- Copy config.json.example to config.json
-- Install npm packages
-- Create and enable systemd service
-- Start Pod Manager on port 7000
+Installer v2 walks through one guided setup:
+- Choose `Pod-Man Central` or `Local-only`
+- If using Central, provide your existing API key and `wss://.../agent-connect`
+- If local-only, choose a localhost port (default `7000`)
+- Optionally enable HTTPS through nginx
+- Start `pod-manager.service`
+- Verify local health, and in Central mode also verify registration and reverse tunnel setup
+
+### Install Flow
+
+```text
+install.sh
+  -> write config.json
+  -> install npm deps + pod-manager.service
+  -> start Pod-Man on 127.0.0.1
+  -> optional nginx HTTPS proxy
+  -> optional Central registration + reverse tunnel verification
+```
+
+### Central vs Local-only
+
+- **Central mode**: Uses an existing Pod-Man Central API key and `wss://.../agent-connect`, enables auto-connect, and verifies the pNode registers during install.
+- **Local-only mode**: Keeps Pod-Man on `127.0.0.1` and prompts for a local port, default `7000`.
+
+### HTTPS Options
+
+- **Self-signed / IP-based**: Works immediately and is suitable for private or operator-only access, but browsers will show a warning.
+- **Let's Encrypt / FQDN-based**: Requires a real domain name pointing at the server and allows trusted public HTTPS.
+
+Pod-Man itself should remain bound to `127.0.0.1`; nginx is the supported v1 public-access path when HTTPS is enabled.
 
 ### First-Time Setup
 
-1. **Access the setup page**: Navigate to `http://127.0.0.1:7000` (or via SSH tunnel)
+1. **Access the setup page**:
+   - Local-only: navigate to `http://127.0.0.1:<your-port>` or use an SSH tunnel
+   - HTTPS mode: navigate to `https://YOUR-IP:443` or `https://YOUR-FQDN:443`
 
 2. **Create admin account**: 
    - You'll see the setup page automatically on first visit
@@ -148,6 +174,8 @@ ssh -L 7000:localhost:7000 user@your-server
 http://localhost:7000
 ```
 
+If you chose a different local port during install, replace `7000` with that port.
+
 ### Public Access with HTTPS (Optional)
 
 ```bash
@@ -155,7 +183,11 @@ cd /root/pod-man
 sudo bash setup-https.sh
 ```
 
-Then access: `https://YOUR-IP:443`
+Then choose:
+- `Self-signed` for IP-based HTTPS
+- `Let's Encrypt` for FQDN-based trusted HTTPS
+
+Trusted public HTTPS requires a real FQDN. IP-only HTTPS is supported only with a self-signed certificate.
 
 ## Security Considerations
 

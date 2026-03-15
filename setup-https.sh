@@ -1,298 +1,269 @@
 #!/bin/bash
 
-# Xandeum Pod Manager - Turn-Key HTTPS Setup
-# Can be run standalone or called from install.sh
+set -euo pipefail
 
-set -e
-
-# Color codes for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-    echo -e "${RED}Error: This script must be run as root${NC}"
-    echo "Please run: sudo bash setup-https.sh"
+HTTPS_PORT="${HTTPS_PORT:-443}"
+POD_MANAGER_PORT="${POD_MANAGER_PORT:-7000}"
+POD_MANAGER_INSTALL_DIR="${POD_MANAGER_INSTALL_DIR:-/root/pod-man}"
+SSL_TYPE="${SSL_TYPE:-}"
+DOMAIN_NAME="${DOMAIN_NAME:-}"
+POD_MANAGER_SERVER_NAME="${POD_MANAGER_SERVER_NAME:-}"
+SETUP_HTTPS_NONINTERACTIVE="${SETUP_HTTPS_NONINTERACTIVE:-0}"
+
+print_banner() {
+    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}  Xandeum Pod Manager - HTTPS Setup${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
+
+die() {
+    echo -e "${RED}✗ $1${NC}"
     exit 1
-fi
+}
 
-# Handle uninstall
-if [ "$1" = "--remove" ] || [ "$1" = "--uninstall" ]; then
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  REMOVING HTTPS SETUP${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    
-    if [ -f /etc/nginx/sites-enabled/pod-manager ]; then
-        rm -f /etc/nginx/sites-enabled/pod-manager
-        rm -f /etc/nginx/sites-available/pod-manager
-        echo -e "${GREEN}✓${NC} Removed nginx configuration"
+info() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}!${NC} $1"
+}
+
+prompt_yes_no() {
+    local prompt="$1"
+    local default="${2:-N}"
+    local answer
+    read -r -p "${prompt} " answer
+    answer="${answer:-$default}"
+    [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+require_root() {
+    if [ "$EUID" -ne 0 ]; then
+        die "This script must be run as root"
     fi
-    
+}
+
+validate_port() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] || die "HTTPS port must be numeric"
+    if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        die "HTTPS port must be between 1 and 65535"
+    fi
+}
+
+validate_domain() {
+    local value="$1"
+    [[ "$value" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || die "A valid FQDN is required for Let's Encrypt"
+}
+
+detect_public_ip() {
+    curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null || true
+}
+
+remove_https() {
+    print_banner
+    echo -e "${YELLOW}Removing HTTPS setup${NC}"
+
+    rm -f /etc/nginx/sites-enabled/pod-manager
+    rm -f /etc/nginx/sites-available/pod-manager
+    rm -f "${POD_MANAGER_INSTALL_DIR}/.https-config"
+
     if systemctl is-active --quiet nginx; then
-        systemctl reload nginx
-        echo -e "${GREEN}✓${NC} Reloaded nginx"
+        systemctl reload nginx || true
     fi
-    
-    echo ""
-    echo -e "${GREEN}HTTPS setup removed. Pod Manager still accessible at http://127.0.0.1:7000${NC}"
+
+    info "HTTPS setup removed. Pod-Man remains accessible at http://127.0.0.1:${POD_MANAGER_PORT}"
     exit 0
-fi
+}
 
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  Xandeum Pod Manager - HTTPS Setup Wizard${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo "This wizard will set up HTTPS access to your Pod Manager with:"
-echo "  • Secure HTTPS connection (SSL/TLS)"
-echo "  • Password authentication"
-echo "  • nginx reverse proxy"
-echo ""
+choose_mode() {
+    if [ "$SETUP_HTTPS_NONINTERACTIVE" = "1" ]; then
+        [ -n "$SSL_TYPE" ] || die "SSL_TYPE must be set for non-interactive HTTPS setup"
+    else
+        if ! prompt_yes_no "Would you like to enable HTTPS access? [y/N]:" "N"; then
+            warn "HTTPS setup skipped"
+            exit 0
+        fi
 
-# Ask if user wants HTTPS
-if [ -z "$SKIP_HTTPS_PROMPT" ]; then
-    read -p "Would you like to enable HTTPS access? (y/N): " ENABLE_HTTPS
-    if [[ ! "$ENABLE_HTTPS" =~ ^[Yy]$ ]]; then
         echo ""
-        echo -e "${YELLOW}HTTPS setup skipped. Pod Manager accessible at http://127.0.0.1:7000${NC}"
-        exit 0
+        echo "Certificate options:"
+        echo "  [S] Self-signed certificate (works with IP, browser warning)"
+        echo "  [L] Let's Encrypt certificate (requires FQDN)"
+        echo ""
+        read -r -p "Choose option [S/l]: " SSL_TYPE
+        SSL_TYPE="${SSL_TYPE:-S}"
     fi
-fi
 
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Step 1: Installing Dependencies${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-apt-get update -qq
-apt-get install -y nginx apache2-utils >/dev/null 2>&1
-echo -e "${GREEN}✓${NC} Installed nginx and apache2-utils"
-
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Step 2: Authentication Setup${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Step 3: SSL Certificate${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-# Determine certificate type
-if [ -z "$SSL_TYPE" ]; then
-    echo "Certificate options:"
-    echo "  [S] Self-signed certificate (works immediately, browser warning)"
-    echo "  [L] Let's Encrypt (requires domain name, no browser warning)"
-    echo ""
-    read -p "Choose option [S/l]: " CERT_TYPE
-    CERT_TYPE=${CERT_TYPE:-s}
-else
-    CERT_TYPE="$SSL_TYPE"
-fi
-
-if [[ "$CERT_TYPE" =~ ^[Ll]$ ]]; then
-    # Let's Encrypt
-    if [ -z "$DOMAIN_NAME" ]; then
-        read -p "Enter your domain name (e.g., monitor.example.com): " DOMAIN
+    if [[ "$SSL_TYPE" =~ ^[Ll]$|^letsencrypt$ ]]; then
+        SSL_TYPE="letsencrypt"
+        if [ -z "$DOMAIN_NAME" ]; then
+            read -r -p "Enter your FQDN (example: monitor.example.com): " DOMAIN_NAME
+        fi
+        validate_domain "$DOMAIN_NAME"
+        POD_MANAGER_SERVER_NAME="$DOMAIN_NAME"
     else
-        DOMAIN="$DOMAIN_NAME"
+        SSL_TYPE="self-signed"
+        if [ -z "$POD_MANAGER_SERVER_NAME" ]; then
+            POD_MANAGER_SERVER_NAME="$(detect_public_ip)"
+        fi
+        [ -n "$POD_MANAGER_SERVER_NAME" ] || die "A public IP is required for self-signed HTTPS"
     fi
-    
-    if [ -z "$DOMAIN" ]; then
-        echo -e "${RED}Error: Domain name required for Let's Encrypt${NC}"
-        exit 1
+}
+
+install_nginx_dependencies() {
+    apt-get update -qq
+    apt-get install -y nginx >/dev/null 2>&1
+    info "Installed nginx"
+
+    if [ "$SSL_TYPE" = "letsencrypt" ]; then
+        apt-get install -y certbot python3-certbot-nginx >/dev/null 2>&1
+        info "Installed certbot"
     fi
-    
-    # Install certbot
-    apt-get install -y certbot python3-certbot-nginx >/dev/null 2>&1
-    echo -e "${GREEN}✓${NC} Installed certbot"
-    
-    # Obtain certificate using standalone mode (before nginx config)
-    echo "Obtaining Let's Encrypt certificate..."
-    certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✓${NC} Obtained Let's Encrypt certificate"
+}
+
+configure_certificate() {
+    if [ "$SSL_TYPE" = "letsencrypt" ]; then
+        echo "Obtaining Let's Encrypt certificate..."
+        if systemctl is-active --quiet nginx; then
+            systemctl stop nginx
+        fi
+        certbot certonly --standalone -d "$DOMAIN_NAME" --non-interactive --agree-tos --register-unsafely-without-email
+        SSL_CERT="/etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem"
+        SSL_KEY="/etc/letsencrypt/live/$DOMAIN_NAME/privkey.pem"
+        info "Obtained Let's Encrypt certificate"
     else
-        echo -e "${RED}✗ Failed to obtain certificate${NC}"
-        echo "  Make sure port 80 is accessible and domain points to this server"
-        exit 1
+        mkdir -p /etc/ssl/xandeum
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout /etc/ssl/xandeum/pod-manager.key \
+            -out /etc/ssl/xandeum/pod-manager.crt \
+            -subj "/C=US/ST=State/L=City/O=Xandeum/CN=${POD_MANAGER_SERVER_NAME}" \
+            >/dev/null 2>&1
+        SSL_CERT="/etc/ssl/xandeum/pod-manager.crt"
+        SSL_KEY="/etc/ssl/xandeum/pod-manager.key"
+        warn "Generated self-signed certificate; browsers will show a warning"
     fi
-    
-    SSL_CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-    SSL_KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
-    USE_LETSENCRYPT=true
-else
-    # Self-signed certificate
-    echo "Generating self-signed certificate..."
-    
-    mkdir -p /etc/ssl/xandeum
-    
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout /etc/ssl/xandeum/monitor.key \
-        -out /etc/ssl/xandeum/monitor.crt \
-        -subj "/C=US/ST=State/L=City/O=Xandeum/CN=pod-manager" \
-        >/dev/null 2>&1
-    
-    echo -e "${GREEN}✓${NC} Generated self-signed SSL certificate (valid 365 days)"
-    echo -e "${YELLOW}⚠️  Note: Browser will show security warning (self-signed cert)${NC}"
-    
-    SSL_CERT="/etc/ssl/xandeum/monitor.crt"
-    SSL_KEY="/etc/ssl/xandeum/monitor.key"
-    USE_LETSENCRYPT=false
-fi
+}
 
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Step 4: nginx Configuration${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-# Determine port
-HTTPS_PORT=${HTTPS_PORT:-443}
-
-# Get server name (IP or domain)
-if [ -n "$DOMAIN" ]; then
-    SERVER_NAME="$DOMAIN"
-else
-    # Try to get public IP
-    PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")
-    SERVER_NAME="$PUBLIC_IP"
-fi
-
-# Create nginx configuration
-cat > /etc/nginx/sites-available/pod-manager <<EOF
+write_nginx_config() {
+    cat > /etc/nginx/sites-available/pod-manager <<EOF
 # Xandeum Pod Manager - HTTPS Reverse Proxy
 # Generated by setup-https.sh
 
 server {
-    listen $HTTPS_PORT ssl http2;
-    listen [::]:$HTTPS_PORT ssl http2;
-    
-    server_name $SERVER_NAME;
-    
-    # SSL Configuration
-    ssl_certificate $SSL_CERT;
-    ssl_certificate_key $SSL_KEY;
-    
-    # Modern SSL configuration
+    listen ${HTTPS_PORT} ssl http2;
+    listen [::]:${HTTPS_PORT} ssl http2;
+    server_name ${POD_MANAGER_SERVER_NAME};
+
+    ssl_certificate ${SSL_CERT};
+    ssl_certificate_key ${SSL_KEY};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
-    
-    # Security Headers
+
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    
-    # Basic Authentication
-    # Authentication handled by application (login page)
-    
-    # Note: Rate limiting handled by application (server.js)
-    
-    # Proxy to Pod Manager
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Robots-Tag "noindex, nofollow" always;
+
     location / {
-        proxy_pass http://127.0.0.1:7000;
+        proxy_pass http://127.0.0.1:${POD_MANAGER_PORT};
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_cache_bypass \$http_upgrade;
-        
-        # WebSocket support
         proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
     }
-    
-    # Logs
+
     access_log /var/log/nginx/pod-manager-access.log;
     error_log /var/log/nginx/pod-manager-error.log;
 }
 EOF
 
-echo -e "${GREEN}✓${NC} Created nginx configuration"
-
-# Enable site
-ln -sf /etc/nginx/sites-available/pod-manager /etc/nginx/sites-enabled/
-
-# Disable default nginx site if it exists (prevents port 80 conflict)
-if [ -f /etc/nginx/sites-enabled/default ]; then
+    ln -sf /etc/nginx/sites-available/pod-manager /etc/nginx/sites-enabled/pod-manager
     rm -f /etc/nginx/sites-enabled/default
-    echo "✓ Disabled default nginx site"
-fi
+    info "nginx configuration written for Pod-Man on localhost:${POD_MANAGER_PORT}"
+}
 
-# Test nginx configuration
-if nginx -t >/dev/null 2>&1; then
-    echo -e "${GREEN}✓${NC} nginx configuration is valid"
-else
-    echo -e "${RED}✗${NC} nginx configuration test failed"
-    nginx -t
-    exit 1
-fi
+enable_nginx() {
+    nginx -t >/dev/null 2>&1 || {
+        nginx -t
+        die "nginx configuration test failed"
+    }
 
+    if systemctl is-active --quiet nginx; then
+        systemctl reload nginx
+    else
+        systemctl start nginx
+    fi
 
-# Start or reload nginx
-if systemctl is-active --quiet nginx; then
-    systemctl reload nginx
-    echo -e "${GREEN}✓${NC} Reloaded nginx"
-else
-    systemctl start nginx
-    echo -e "${GREEN}✓${NC} Started nginx"
-fi
+    systemctl enable nginx >/dev/null 2>&1
+    info "nginx is active"
+}
 
-# Enable nginx on boot
-systemctl enable nginx >/dev/null 2>&1
-
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Setup Complete!${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo -e "${GREEN}✅ HTTPS is now enabled!${NC}"
-echo ""
-echo "Access your Pod Manager at:"
-echo -e "${BLUE}  https://$SERVER_NAME:$HTTPS_PORT${NC}"
-echo ""
-echo "First-time access:"
-echo -e "  ${BLUE}Navigate to the URL above${NC}"
-echo -e "  ${BLUE}Complete setup (create admin account)${NC}"
-echo ""
-
-if [ "$USE_LETSENCRYPT" = false ]; then
-    echo -e "${YELLOW}⚠️  Browser Security Warning:${NC}"
-    echo "Your browser will show a security warning because of the self-signed"
-    echo "certificate. This is normal. Click 'Advanced' and proceed to the site."
-    echo ""
-    echo "To avoid the warning, use Let's Encrypt:"
-    echo "  sudo bash setup-https.sh --remove"
-    echo "  sudo bash setup-https.sh  (then choose Let's Encrypt)"
-    echo ""
-fi
-
-echo "Additional commands:"
-echo "  Test nginx:    sudo nginx -t"
-echo "  Reload nginx:  sudo systemctl reload nginx"
-echo "  View logs:     sudo tail -f /var/log/nginx/pod-manager-*.log"
-echo "  Remove HTTPS:  sudo bash setup-https.sh --remove"
-echo ""
-
-# Save configuration info
-cat > /root/pod-man/.https-config <<EOF
+save_https_metadata() {
+    mkdir -p "$POD_MANAGER_INSTALL_DIR"
+    cat > "${POD_MANAGER_INSTALL_DIR}/.https-config" <<EOF
 HTTPS_ENABLED=true
-HTTPS_PORT=$HTTPS_PORT
-USERNAME=$USERNAME
-SSL_TYPE=$([[ "$USE_LETSENCRYPT" = true ]] && echo "letsencrypt" || echo "self-signed")
-SERVER_NAME=$SERVER_NAME
-INSTALL_DATE=$(date)
+HTTPS_PORT=${HTTPS_PORT}
+SSL_TYPE=${SSL_TYPE}
+SERVER_NAME=${POD_MANAGER_SERVER_NAME}
+POD_MANAGER_PORT=${POD_MANAGER_PORT}
+INSTALL_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
+}
 
-echo -e "${GREEN}Configuration saved to: /root/pod-man/.https-config${NC}"
-echo ""
+print_summary() {
+    print_banner
+    echo -e "${GREEN}HTTPS is now enabled${NC}"
+    echo ""
+    echo "Access URL:"
+    echo "  https://${POD_MANAGER_SERVER_NAME}:${HTTPS_PORT}"
+    echo ""
+    echo "Pod-Man upstream:"
+    echo "  http://127.0.0.1:${POD_MANAGER_PORT}"
+    echo ""
+    if [ "$SSL_TYPE" = "self-signed" ]; then
+        warn "This is a self-signed certificate. Browsers will show a warning."
+        echo ""
+    fi
+    echo "Useful commands:"
+    echo "  sudo nginx -t"
+    echo "  sudo systemctl reload nginx"
+    echo "  sudo tail -f /var/log/nginx/pod-manager-error.log"
+    echo "  sudo bash setup-https.sh --remove"
+    echo ""
+}
+
+main() {
+    require_root
+    validate_port "$HTTPS_PORT"
+    validate_port "$POD_MANAGER_PORT"
+
+    if [ "${1:-}" = "--remove" ] || [ "${1:-}" = "--uninstall" ]; then
+        remove_https
+    fi
+
+    choose_mode
+    install_nginx_dependencies
+    configure_certificate
+    write_nginx_config
+    enable_nginx
+    save_https_metadata
+    print_summary
+}
+
+main "$@"
