@@ -803,12 +803,11 @@ function displayServices(services) {
     for (const [name, status] of Object.entries(services)) {
         const isSelfService = name === 'pod-manager';
         const stopDisabled = state.readOnly || isSelfService;
-        const restartDisabled = state.readOnly || isSelfService;
         const stopTitle = isSelfService
             ? 'Stop pod-manager from the server shell: sudo systemctl stop pod-manager'
             : '';
         const restartTitle = isSelfService
-            ? 'Restart pod-manager from the server shell: sudo systemctl restart pod-manager'
+            ? 'Restart pod-manager; this page may disconnect briefly while it comes back'
             : '';
         const item = document.createElement('div');
         item.className = 'service-item';
@@ -822,11 +821,11 @@ function displayServices(services) {
                 </div>
                 <div class="service-actions">
                     <button class="btn btn-primary" data-protected="true" onclick="controlService('${name}', 'start')">Start</button>
-                    <button class="btn btn-danger" data-protected="true" onclick="controlService('${name}', 'stop')" ${stopDisabled ? 'disabled' : ''} title="${stopTitle}">Stop</button>
-                    <button class="btn btn-secondary" data-protected="true" onclick="controlService('${name}', 'restart')" ${restartDisabled ? 'disabled' : ''} title="${restartTitle}">Restart</button>
+                    ${isSelfService ? '' : `<button class="btn btn-danger" data-protected="true" onclick="controlService('${name}', 'stop')" ${stopDisabled ? 'disabled' : ''} title="${stopTitle}">Stop</button>`}
+                    <button class="btn btn-secondary" data-protected="true" onclick="controlService('${name}', 'restart')" title="${restartTitle}">Restart</button>
                 </div>
             </div>
-            ${isSelfService ? '<p style="color: var(--warning-color); font-size: 12px; margin-top: 8px;">`pod-manager` restart/stop must be done from the server shell so this UI does not disconnect itself.</p>' : ''}
+            ${isSelfService ? '<p style="color: var(--warning-color); font-size: 12px; margin-top: 8px;">`pod-manager` can be restarted here, but stopping it is only allowed from the server shell to avoid locking you out.</p>' : ''}
             <pre style="color: var(--text-secondary); font-size: 12px; margin-top: 10px; max-height: 300px; overflow-y: auto;">${status.output.substring(0, 2000)}</pre>
         `;
         const buttons = item.querySelectorAll('button');
@@ -856,10 +855,13 @@ async function controlService(name, action) {
     
     if (guardDangerous()) return;
     
-    if (name === 'pod-manager' && (action === 'stop' || action === 'restart')) {
+    if (name === 'pod-manager' && action === 'restart') {
         if (!confirm(`WARNING: ${action} on pod-manager will disconnect this interface. Continue?`)) {
             return;
         }
+    } else if (name === 'pod-manager' && action === 'stop') {
+        alert('Stop for pod-manager is intentionally disabled in the UI. Use: sudo systemctl stop pod-manager.service');
+        return;
     } else {
         if (!confirm(`Are you sure you want to ${action} ${name}?`)) {
             return;
@@ -873,6 +875,14 @@ async function controlService(name, action) {
         const data = await parseJsonResponse(response);
 
         if (response.ok && data.success) {
+            if (name === 'pod-manager' && action === 'restart') {
+                alert('pod-manager restart scheduled. This page may disconnect briefly while the service comes back.');
+                setTimeout(() => {
+                    window.location.reload();
+                }, 4000);
+                return;
+            }
+
             alert(`${name} ${action} successful`);
             await refreshServicesWithSettle();
         } else {
