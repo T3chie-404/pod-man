@@ -64,6 +64,34 @@ prompt_yes_no() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+prompt_secret() {
+    local prompt="$1"
+    local secret=""
+    local char=""
+
+    printf "%s" "$prompt"
+
+    while IFS= read -r -s -n1 char; do
+        if [[ "$char" == $'\n' || "$char" == $'\r' ]]; then
+            break
+        fi
+
+        if [[ "$char" == $'\177' || "$char" == $'\b' ]]; then
+            if [ -n "$secret" ]; then
+                secret="${secret%?}"
+                printf '\b \b'
+            fi
+            continue
+        fi
+
+        secret+="$char"
+        printf '*'
+    done
+
+    printf '\n'
+    REPLY="$secret"
+}
+
 require_root() {
     if [ "$EUID" -ne 0 ]; then
         die "Please run as root: sudo bash install.sh"
@@ -178,8 +206,8 @@ prompt_install_mode() {
         read -r -p "Central WebSocket URL [wss://pod-man.com/agent-connect]: " CENTRAL_URL
         CENTRAL_URL="${CENTRAL_URL:-wss://pod-man.com/agent-connect}"
         validate_central_url "$CENTRAL_URL"
-        read -r -s -p "Central API Key: " API_KEY
-        echo ""
+        prompt_secret "Central API Key: "
+        API_KEY="$REPLY"
         [ -n "$API_KEY" ] || die "API key is required for Central mode"
         info "Central mode selected"
     else
