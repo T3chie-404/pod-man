@@ -1236,6 +1236,15 @@ function connectTerminalWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/terminal`;
     
+    if (window.terminalDataHandler && typeof window.terminalDataHandler.dispose === 'function') {
+        window.terminalDataHandler.dispose();
+        window.terminalDataHandler = null;
+    }
+    if (window.terminalResizeHandler && typeof window.terminalResizeHandler.dispose === 'function') {
+        window.terminalResizeHandler.dispose();
+        window.terminalResizeHandler = null;
+    }
+    
     terminalSocket = new WebSocket(wsUrl);
     
     terminalSocket.onopen = () => {
@@ -1246,15 +1255,7 @@ function connectTerminalWebSocket() {
             type: 'auth',
             role: window.userRole || 'admin'
         }));
-        
-        // IMPORTANT: Remove old listeners before attaching new ones (prevents duplicate chars)
-        if (window.terminalDataHandler) {
-            terminal.onData(() => {});
-        }
-        if (window.terminalResizeHandler) {
-            terminal.onResize(() => {});
-        }
-        
+
         // Send data from terminal to WebSocket
         window.terminalDataHandler = terminal.onData(data => {
             if (terminalSocket.readyState === WebSocket.OPEN) {
@@ -1288,18 +1289,4 @@ function connectTerminalWebSocket() {
     terminalSocket.onclose = () => {
         terminal.write('\r\n\x1b[31mDisconnected from terminal\x1b[0m\r\n');
     };
-}
-
-function reconnectTerminal() {
-    if (terminalSocket) {
-        terminalSocket.close();
-    }
-    
-    if (terminal) {
-        terminal.clear();
-    }
-    
-    setTimeout(() => {
-        connectTerminalWebSocket();
-    }, 500);
 }
