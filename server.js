@@ -16,6 +16,7 @@ const NetworkManager = require("./lib/network");
 const SystemMonitor = require("./lib/system");
 const terminalManager = require("./lib/terminal");
 const CentralConnector = require("./lib/central/central-connector");
+const { getComponentVersions } = require("./lib/component-versions");
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
@@ -669,7 +670,7 @@ app.post("/api/find-pubkey", requireAdminOrStandard, async (req, res) => {
 app.post("/api/prpc/:method", requireAuth, async (req, res) => {
   try {
     const method = req.params.method;
-    const params = req.body.params || {};
+    const params = (req.body && req.body.params) || {};
     
     let result;
     
@@ -693,6 +694,18 @@ app.post("/api/prpc/:method", requireAuth, async (req, res) => {
     }
     
     res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Component versions
+ */
+app.get("/api/component-versions", requireAuth, async (req, res) => {
+  try {
+    const versions = await getComponentVersions();
+    res.json({ success: true, versions });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

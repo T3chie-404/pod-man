@@ -19,6 +19,23 @@ const state = {
     logLines: 100
 };
 
+async function parseJsonResponse(response) {
+    const text = await response.text();
+    if (!text || !text.trim()) {
+        return { success: response.ok, error: response.ok ? null : `HTTP ${response.status}` };
+    }
+
+    try {
+        return JSON.parse(text);
+    } catch (error) {
+        return {
+            success: false,
+            error: `Invalid JSON response (HTTP ${response.status})`,
+            raw: text
+        };
+    }
+}
+
 
 function loadMetricsCache() {
     try {
@@ -280,19 +297,18 @@ async function logout() {
 // Load component versions
 async function loadVersions() {
     try {
-        const response = await fetch("/api/prpc/get-version", { method: "POST" });
+        const response = await fetch("/api/component-versions");
         const data = await response.json();
         
-        if (data.success && data.result && data.result.version) {
-            const version = data.result.version;
-            // All components use the same version from pod
+        if (data.success && data.versions) {
+            const versions = data.versions;
             const versionEl = document.getElementById("version-xandminer");
             const versionEl2 = document.getElementById("version-xandminerd");
             const versionEl3 = document.getElementById("version-pod");
             
-            if (versionEl) versionEl.textContent = version;
-            if (versionEl2) versionEl2.textContent = version;
-            if (versionEl3) versionEl3.textContent = version;
+            if (versionEl) versionEl.textContent = versions.xandminer || "Unknown";
+            if (versionEl2) versionEl2.textContent = versions.xandminerd || "Unknown";
+            if (versionEl3) versionEl3.textContent = versions.pod || "Unknown";
         } else {
             // Set to "Unknown" if failed
             ["version-xandminer", "version-xandminerd", "version-pod"].forEach(id => {
@@ -764,6 +780,22 @@ async function loadServices() {
     }
 }
 
+async function refreshServicesWithSettle() {
+    await loadServices();
+    setTimeout(() => {
+        loadServices().catch((error) => console.warn('Delayed services refresh failed:', error));
+    }, 1500);
+}
+
+async function getServiceStatus(name) {
+    const response = await fetch(`/api/services/${name}`);
+    const data = await parseJsonResponse(response);
+    if (!response.ok || !data.success || !data.service) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    return data.service;
+}
+
 function displayServices(services) {
     const container = document.getElementById('services-list');
     container.innerHTML = '';
@@ -824,13 +856,25 @@ async function controlService(name, action) {
         const response = await fetch(`/api/services/${name}/${action}`, {
             method: 'POST'
         });
-        const data = await response.json();
-        
-        if (data.success) {
+        const data = await parseJsonResponse(response);
+
+        if (response.ok && data.success) {
             alert(`${name} ${action} successful`);
-            await loadServices();
+            await refreshServicesWithSettle();
         } else {
-            alert(`Error: ${data.error}`);
+            const desiredRunning = action === 'start' || action === 'restart';
+            try {
+                const status = await getServiceStatus(name);
+                if (status.running === desiredRunning) {
+                    alert(`${name} ${action} successful`);
+                    await refreshServicesWithSettle();
+                    return;
+                }
+            } catch (statusError) {
+                console.warn('Post-action status check failed:', statusError);
+            }
+
+            alert(`Error: ${data.error || `HTTP ${response.status}` || 'Request failed'}`);
         }
     } catch (error) {
         alert(`Error: ${error.message}`);
@@ -853,13 +897,13 @@ async function restartAllServices() {
         const response = await fetch('/api/services/restart-all', {
             method: 'POST'
         });
-        const data = await response.json();
-        
+        const data = await parseJsonResponse(response);
+
         if (data.success) {
             alert('All services restarted');
             await loadServices();
         } else {
-            alert(`Error: ${data.error}`);
+            alert(`Error: ${data.error || 'Request failed'}`);
         }
     } catch (error) {
         alert(`Error: ${error.message}`);
@@ -1032,14 +1076,19 @@ async function callAPI(method) {
     
     try {
         const response = await fetch(`/api/prpc/${method}`, {
-            method: 'POST'
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ params: {} })
         });
-        const data = await response.json();
-        
-        if (data.success) {
-            container.innerHTML = `<pre>${JSON.stringify(data.result || data.raw, null, 2)}</pre>`;
+        const data = await parseJsonResponse(response);
+
+        if (response.ok && data.success) {
+            container.innerHTML = `<pre>${JSON.stringify(data.result || data.raw || data, null, 2)}</pre>`;
         } else {
-            container.innerHTML = `<p style="color: var(--danger-color);">Error: ${data.error}</p>`;
+            const errorText = data.error || data.raw || `HTTP ${response.status}`;
+            container.innerHTML = `<p style="color: var(--danger-color);">Error: ${errorText}</p>`;
         }
     } catch (error) {
         container.innerHTML = `<p style="color: var(--danger-color);">Error: ${error.message}</p>`;
