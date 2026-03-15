@@ -17,6 +17,7 @@ const SystemMonitor = require("./lib/system");
 const terminalManager = require("./lib/terminal");
 const CentralConnector = require("./lib/central/central-connector");
 const { getComponentVersions } = require("./lib/component-versions");
+const { getPodPubkey, refreshPodPubkey } = require("./lib/pod-pubkey");
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
@@ -657,7 +658,7 @@ app.get("/api/logs/:service", requireAuth, async (req, res) => {
  */
 app.post("/api/find-pubkey", requireAdminOrStandard, async (req, res) => {
   try {
-    const result = await LogManager.findPubkey();
+    const result = await refreshPodPubkey();
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -780,7 +781,7 @@ app.get("/api/terminal/activity", (req, res) => {
  */
 app.get("/api/pod-pubkey", requireAuth, async (req, res) => {
   try {
-    const result = await LogManager.getPubkeyPassive();
+    const result = await getPodPubkey();
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -794,7 +795,7 @@ app.get("/api/pod-credits", requireAuth, async (req, res) => {
   try {
     const [creditsResp, pubkeyResult] = await Promise.all([
       axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
-      LogManager.getPubkeyPassive()
+      getPodPubkey()
     ]);
 
     const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];
@@ -817,7 +818,7 @@ app.get("/api/pod-credits", requireAuth, async (req, res) => {
  */
 app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {  try {    const [creditsResp, pubkeyResult] = await Promise.all([
       axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
-      LogManager.getPubkeyPassive()
+      getPodPubkey()
     ]);
     const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];    const creditsOnly = list.map(p => p.credits).filter(c => typeof c === "number").sort((a, b) => a - b);
     const count = creditsOnly.length;
