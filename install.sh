@@ -67,28 +67,13 @@ prompt_yes_no() {
 prompt_secret() {
     local prompt="$1"
     local secret=""
-    local char=""
-
-    printf "%s" "$prompt"
-
-    while IFS= read -r -s -n1 char; do
-        if [[ "$char" == $'\n' || "$char" == $'\r' ]]; then
-            break
-        fi
-
-        if [[ "$char" == $'\177' || "$char" == $'\b' ]]; then
-            if [ -n "$secret" ]; then
-                secret="${secret%?}"
-                printf '\b \b'
-            fi
-            continue
-        fi
-
-        secret+="$char"
-        printf '*'
-    done
-
+    read -r -s -p "$prompt" secret
     printf '\n'
+
+    if [ -n "$secret" ]; then
+        echo "  [hidden input received: ${#secret} characters]"
+    fi
+
     REPLY="$secret"
 }
 
