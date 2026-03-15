@@ -801,6 +801,15 @@ function displayServices(services) {
     container.innerHTML = '';
     
     for (const [name, status] of Object.entries(services)) {
+        const isSelfService = name === 'pod-manager';
+        const stopDisabled = state.readOnly || isSelfService;
+        const restartDisabled = state.readOnly || isSelfService;
+        const stopTitle = isSelfService
+            ? 'Stop pod-manager from the server shell: sudo systemctl stop pod-manager'
+            : '';
+        const restartTitle = isSelfService
+            ? 'Restart pod-manager from the server shell: sudo systemctl restart pod-manager'
+            : '';
         const item = document.createElement('div');
         item.className = 'service-item';
         item.innerHTML = `
@@ -813,14 +822,19 @@ function displayServices(services) {
                 </div>
                 <div class="service-actions">
                     <button class="btn btn-primary" data-protected="true" onclick="controlService('${name}', 'start')">Start</button>
-                    <button class="btn btn-danger" data-protected="true" onclick="controlService('${name}', 'stop')">Stop</button>
-                    <button class="btn btn-secondary" data-protected="true" onclick="controlService('${name}', 'restart')">Restart</button>
+                    <button class="btn btn-danger" data-protected="true" onclick="controlService('${name}', 'stop')" ${stopDisabled ? 'disabled' : ''} title="${stopTitle}">Stop</button>
+                    <button class="btn btn-secondary" data-protected="true" onclick="controlService('${name}', 'restart')" ${restartDisabled ? 'disabled' : ''} title="${restartTitle}">Restart</button>
                 </div>
             </div>
+            ${isSelfService ? '<p style="color: var(--warning-color); font-size: 12px; margin-top: 8px;">`pod-manager` restart/stop must be done from the server shell so this UI does not disconnect itself.</p>' : ''}
             <pre style="color: var(--text-secondary); font-size: 12px; margin-top: 10px; max-height: 300px; overflow-y: auto;">${status.output.substring(0, 2000)}</pre>
         `;
         const buttons = item.querySelectorAll('button');
-        buttons.forEach(btn => btn.disabled = state.readOnly);
+        buttons.forEach(btn => {
+            if (!btn.disabled) {
+                btn.disabled = state.readOnly;
+            }
+        });
         container.appendChild(item);
     }
     
