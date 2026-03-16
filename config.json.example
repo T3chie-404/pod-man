@@ -45,6 +45,9 @@
     "apiKey": "",
     "centralUrl": "",
     "autoConnect": false,
-    "metricsInterval": 30000
+    "metricsInterval": 30000,
+    "centralSshHost": "",
+    "sshKnownHostsPath": "",
+    "allowRemoteSshKeyInstall": false
   }
 }

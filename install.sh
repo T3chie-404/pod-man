@@ -21,6 +21,8 @@ HTTPS_MODE=""
 SERVER_NAME=""
 LOCAL_PORT="$DEFAULT_LOCAL_PORT"
 CENTRAL_URL=""
+CENTRAL_SSH_HOST=""
+SSH_KNOWN_HOSTS_PATH="/root/.ssh/pod-manager-central-known_hosts"
 API_KEY=""
 UPDATE_CHOICE=""
 SERVICE_STARTED_AT=""
@@ -132,6 +134,13 @@ ensure_dependencies() {
         apt-get install -y curl
         info "curl installed"
     fi
+
+    if ! command -v ssh-keyscan >/dev/null 2>&1; then
+        warn "ssh-keyscan not found, installing OpenSSH client..."
+        apt-get update
+        apt-get install -y openssh-client
+        info "OpenSSH client installed"
+    fi
 }
 
 checkout_repo() {
@@ -191,9 +200,11 @@ prompt_install_mode() {
         read -r -p "Central WebSocket URL [wss://pod-man.com/agent-connect]: " CENTRAL_URL
         CENTRAL_URL="${CENTRAL_URL:-wss://pod-man.com/agent-connect}"
         validate_central_url "$CENTRAL_URL"
+        CENTRAL_SSH_HOST="$(extract_central_host "$CENTRAL_URL")"
         prompt_secret "Central API Key: "
         API_KEY="$REPLY"
         [ -n "$API_KEY" ] || die "API key is required for Central mode"
+        bootstrap_central_ssh_trust "$CENTRAL_SSH_HOST"
         info "Central mode selected"
     else
         CENTRAL_MODE=false
@@ -263,6 +274,35 @@ detect_public_ip() {
     curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 5 https://ifconfig.me 2>/dev/null || true
 }
 
+extract_central_host() {
+    local url="$1"
+    python3 - "$url" <<'EOF'
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+print(parsed.hostname or "")
+EOF
+}
+
+bootstrap_central_ssh_trust() {
+    local host="$1"
+    [ -n "$host" ] || die "Could not determine Central SSH host from Central URL"
+
+    mkdir -p "$(dirname "$SSH_KNOWN_HOSTS_PATH")"
+    chmod 700 "$(dirname "$SSH_KNOWN_HOSTS_PATH")"
+
+    local scanned
+    scanned="$(ssh-keyscan -H -t ed25519,rsa "$host" 2>/dev/null || true)"
+    [ -n "$scanned" ] || die "Failed to fetch Central SSH host keys for $host"
+
+    printf '%s\n' "$scanned" > "$SSH_KNOWN_HOSTS_PATH"
+    chmod 600 "$SSH_KNOWN_HOSTS_PATH"
+
+    info "Bootstrapped Central SSH trust for $host"
+    ssh-keygen -lf "$SSH_KNOWN_HOSTS_PATH" | sed 's/^/  Fingerprint: /'
+}
+
 write_config() {
     local mode
     if [ "$CENTRAL_MODE" = true ]; then
@@ -274,6 +314,8 @@ write_config() {
     INSTALLER_MODE="$mode" \
     INSTALLER_PORT="$LOCAL_PORT" \
     INSTALLER_CENTRAL_URL="$CENTRAL_URL" \
+    INSTALLER_CENTRAL_SSH_HOST="$CENTRAL_SSH_HOST" \
+    INSTALLER_SSH_KNOWN_HOSTS_PATH="$SSH_KNOWN_HOSTS_PATH" \
     INSTALLER_API_KEY="$API_KEY" \
     node <<'EOF'
 const fs = require('fs');
@@ -293,11 +335,17 @@ if (process.env.INSTALLER_MODE === 'central') {
   config.centralManagement.apiKey = process.env.INSTALLER_API_KEY || '';
   config.centralManagement.centralUrl = process.env.INSTALLER_CENTRAL_URL || '';
   config.centralManagement.autoConnect = true;
+  config.centralManagement.centralSshHost = process.env.INSTALLER_CENTRAL_SSH_HOST || '';
+  config.centralManagement.sshKnownHostsPath = process.env.INSTALLER_SSH_KNOWN_HOSTS_PATH || '';
+  config.centralManagement.allowRemoteSshKeyInstall = false;
 } else {
   config.centralManagement.enabled = false;
   config.centralManagement.apiKey = '';
   config.centralManagement.centralUrl = '';
   config.centralManagement.autoConnect = false;
+  config.centralManagement.centralSshHost = '';
+  config.centralManagement.sshKnownHostsPath = '';
+  config.centralManagement.allowRemoteSshKeyInstall = false;
 }
 
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
