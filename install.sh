@@ -128,6 +128,13 @@ ensure_dependencies() {
         apt-get install -y openssh-client
         info "OpenSSH client installed"
     fi
+
+    if ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1; then
+        warn "Native build tools not found, installing build-essential..."
+        apt-get update
+        apt-get install -y build-essential
+        info "Native build tools installed"
+    fi
 }
 
 checkout_repo() {
@@ -342,7 +349,7 @@ EOF
 
 install_dependencies() {
     print_step "Step 5: Installing Dependencies"
-    npm install --production
+    npm install --omit=dev
     info "Dependencies installed"
 }
 
