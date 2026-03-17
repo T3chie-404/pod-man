@@ -66,19 +66,6 @@ prompt_yes_no() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
-prompt_secret() {
-    local prompt="$1"
-    local secret=""
-    read -r -s -p "$prompt" secret
-    printf '\n'
-
-    if [ -n "$secret" ]; then
-        echo "  [hidden input received: ${#secret} characters]"
-    fi
-
-    REPLY="$secret"
-}
-
 require_root() {
     if [ "$EUID" -ne 0 ]; then
         die "Please run as root: sudo bash install.sh"
@@ -201,8 +188,7 @@ prompt_install_mode() {
         CENTRAL_URL="${CENTRAL_URL:-wss://pod-man.com/agent-connect}"
         validate_central_url "$CENTRAL_URL"
         CENTRAL_SSH_HOST="$(extract_central_host "$CENTRAL_URL")"
-        prompt_secret "Central API Key: "
-        API_KEY="$REPLY"
+        read -r -p "Central API Key: " API_KEY
         [ -n "$API_KEY" ] || die "API key is required for Central mode"
         bootstrap_central_ssh_trust "$CENTRAL_SSH_HOST"
         info "Central mode selected"
