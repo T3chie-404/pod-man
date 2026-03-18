@@ -92,7 +92,7 @@ ensure_dependencies() {
 
     if ! command -v node >/dev/null 2>&1; then
         warn "Node.js not found, installing..."
-        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
         apt-get install -y nodejs
         info "Node.js installed"
     else
