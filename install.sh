@@ -12,6 +12,7 @@ DEFAULT_INSTALL_DIR="/root/pod-man"
 DEFAULT_LOCAL_PORT="7000"
 DEFAULT_CENTRAL_PORT="7000"
 DEFAULT_HTTPS_PORT="443"
+XANDEUM_INSTALLER_URL="https://raw.githubusercontent.com/Xandeum/xandminer-installer/refs/heads/master/install.sh"
 
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 SKIP_CLONE=false
@@ -446,6 +447,174 @@ verify_https() {
     fi
 }
 
+prepare_xandeum_storage() {
+    local target="/xandeum-pages"
+    local link_path="/run/xandeum-pod"
+
+    print_step "Step 7: Preparing pNode Storage"
+
+    if [ ! -e "$target" ]; then
+        info "Creating $target with fallocate"
+        fallocate "$target" -l 1g || die "Failed to create $target with fallocate"
+    else
+        info "$target already exists"
+    fi
+
+    if [ ! -e "$link_path" ] && [ ! -L "$link_path" ]; then
+        ln -s "$target" "$link_path" || die "Failed to create symlink $link_path -> $target"
+        info "Created $link_path -> $target"
+        return 0
+    fi
+
+    if [ -L "$link_path" ]; then
+        local current_target resolved_target
+        current_target="$(readlink "$link_path")"
+        resolved_target="$(python3 - "$link_path" "$current_target" <<'EOF'
+import os
+import sys
+print(os.path.realpath(os.path.join(os.path.dirname(sys.argv[1]), sys.argv[2])))
+EOF
+)"
+
+        if [ "$resolved_target" = "$target" ]; then
+            info "$link_path already points to $target"
+            return 0
+        fi
+
+        warn "$link_path currently points to a custom target: ${current_target}"
+        echo "Choose how to handle the existing storage link:"
+        echo "  [K] Keep the custom target and continue"
+        echo "  [R] Replace it with $target"
+        echo "  [C] Cancel pNode software install handoff"
+        echo ""
+
+        local choice
+        read -r -p "Choose option [K/r/c]: " choice
+        choice="${choice:-K}"
+
+        case "$choice" in
+            [Kk])
+                warn "Keeping custom storage target: ${current_target}"
+                ;;
+            [Rr])
+                rm "$link_path" || die "Failed to remove existing symlink at $link_path"
+                ln -s "$target" "$link_path" || die "Failed to create symlink $link_path -> $target"
+                info "Replaced $link_path -> $target"
+                ;;
+            [Cc])
+                warn "Canceled pNode software install handoff"
+                return 1
+                ;;
+            *)
+                die "Invalid storage choice"
+                ;;
+        esac
+        return 0
+    fi
+
+    die "$link_path exists but is not a symlink"
+}
+
+download_xandeum_installer() {
+    print_step "Step 8: Fetching Xandeum Installer"
+    cd /root
+    wget -O /root/install.sh "$XANDEUM_INSTALLER_URL" || die "Failed to download Xandeum installer"
+    chmod a+x /root/install.sh || die "Failed to mark /root/install.sh executable"
+    info "Downloaded Xandeum installer to /root/install.sh"
+}
+
+prompt_xandeum_prpc_mode() {
+    while true; do
+        echo "Choose pRPC mode:" >&2
+        echo "  [1] public" >&2
+        echo "  [2] private" >&2
+        echo "" >&2
+        local choice
+        read -r -p "Enter your choice [1/2]: " choice
+        case "$choice" in
+            1) echo "public"; return 0 ;;
+            2) echo "private"; return 0 ;;
+            *) echo "Invalid choice. Please select 1 or 2." >&2 ;;
+        esac
+    done
+}
+
+prompt_xandeum_atlas_cluster() {
+    while true; do
+        echo "Choose Atlas cluster:" >&2
+        echo "  [1] trynet" >&2
+        echo "  [2] devnet" >&2
+        echo "  [3] mainnet-alpha" >&2
+        echo "" >&2
+        local choice
+        read -r -p "Enter your choice [1/2/3]: " choice
+        case "$choice" in
+            1) echo "trynet"; return 0 ;;
+            2) echo "devnet"; return 0 ;;
+            3) echo "mainnet-alpha"; return 0 ;;
+            *) echo "Invalid choice. Please select 1, 2, or 3." >&2 ;;
+        esac
+    done
+}
+
+run_xandeum_installer_interactive() {
+    print_step "Step 9: Launching Xandeum Installer"
+    echo "Starting the Xandeum installer interactively..."
+    cd /root
+    bash /root/install.sh
+}
+
+run_xandeum_installer_noninteractive() {
+    local prpc_mode atlas_cluster
+    print_step "Step 9: Building Non-Interactive Xandeum Install"
+
+    prpc_mode="$(prompt_xandeum_prpc_mode)"
+    atlas_cluster="$(prompt_xandeum_atlas_cluster)"
+
+    local command="./install.sh --non-interactive --install --default-keypair --prpc-mode ${prpc_mode} --atlas-cluster ${atlas_cluster}"
+
+    echo ""
+    echo "Resolved Xandeum install command:"
+    echo "  cd ~ && wget -O install.sh \"$XANDEUM_INSTALLER_URL\" && chmod a+x install.sh && $command"
+    echo ""
+
+    cd /root
+    bash /root/install.sh --non-interactive --install --default-keypair --prpc-mode "$prpc_mode" --atlas-cluster "$atlas_cluster"
+}
+
+offer_xandeum_install_handoff() {
+    print_step "Step 7: Optional pNode Software Install"
+
+    echo "Do you want to install pNode software now?"
+    echo "  [1] Yes - Download and open the current Xandeum pNode installer"
+    echo "  [2] Yes - Build a non-interactive prompt based on my inputs, then run the Xandeum installer"
+    echo "  [3] No - End the Pod-Man installation"
+    echo ""
+
+    local choice
+    read -r -p "Enter your choice [1/2/3]: " choice
+    choice="${choice:-3}"
+
+    case "$choice" in
+        1)
+            prepare_xandeum_storage || return 0
+            download_xandeum_installer
+            run_xandeum_installer_interactive
+            ;;
+        2)
+            prepare_xandeum_storage || return 0
+            download_xandeum_installer
+            run_xandeum_installer_noninteractive
+            ;;
+        3)
+            info "Pod-Man installation finished without launching Xandeum pNode installer"
+            ;;
+        *)
+            die "Invalid option selected"
+            ;;
+    esac
+}
+
 print_summary() {
     local local_url="http://127.0.0.1:${LOCAL_PORT}"
 
@@ -513,6 +682,7 @@ main() {
     fi
 
     print_summary
+    offer_xandeum_install_handoff
 }
 
 main "$@"
