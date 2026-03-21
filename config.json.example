@@ -46,7 +46,10 @@
     "centralUrl": "",
     "autoConnect": false,
     "metricsInterval": 30000,
+    "forceReconnectAfterMs": 180000,
+    "restartAfterMs": 600000,
     "centralSshHost": "",
+    "centralSshUser": "ubuntu",
     "sshKnownHostsPath": "",
     "allowRemoteSshKeyInstall": false
   }
