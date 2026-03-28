@@ -61,18 +61,18 @@ window.addEventListener("beforeunload", stopStatusAutoRefresh);
 
 function updateStatusDisplay(status) {
     const statusDiv = document.getElementById('connection-status');
+    const ownerDiv = document.getElementById('owner-status');
     
     if (!status.enabled) {
         statusDiv.innerHTML = '<span class="status-badge" style="background: #6b7280;">Disabled</span>';
-        return;
-    }
-    
-    if (status.connected) {
+    } else if (status.connected) {
         statusDiv.innerHTML = `
             <span class="status-badge" style="background: #10b981;">Connected</span>
             <p style="margin-top: 10px;">
                 Server: ${status.centralUrl || 'Not configured'}<br>
-                Last Heartbeat: ${status.lastHeartbeat ? new Date(status.lastHeartbeat).toLocaleString() : 'Never'}
+                Last Heartbeat: ${status.lastHeartbeat ? new Date(status.lastHeartbeat).toLocaleString() : 'Never'}<br>
+                Unattended Upgrades: ${status.unattendedUpgradesEnabled ? 'Enabled' : 'Disabled'}<br>
+                Remote Service Control: ${status.remoteServiceControlEnabled ? 'Enabled' : 'Disabled'}
             </p>
         `;
     } else if (status.reconnectAttempts > 0) {
@@ -80,11 +80,37 @@ function updateStatusDisplay(status) {
             <span class="status-badge" style="background: #f59e0b;">Reconnecting...</span>
             <p style="margin-top: 10px;">
                 Attempt: ${status.reconnectAttempts}<br>
-                Server: ${status.centralUrl || 'Not configured'}
+                Server: ${status.centralUrl || 'Not configured'}<br>
+                Unattended Upgrades: ${status.unattendedUpgradesEnabled ? 'Enabled' : 'Disabled'}<br>
+                Remote Service Control: ${status.remoteServiceControlEnabled ? 'Enabled' : 'Disabled'}
             </p>
         `;
     } else {
-        statusDiv.innerHTML = '<span class="status-badge" style="background: #ef4444;">Disconnected</span>';
+        statusDiv.innerHTML = `
+            <span class="status-badge" style="background: #ef4444;">Disconnected</span>
+            <p style="margin-top: 10px;">
+                Unattended Upgrades: ${status.unattendedUpgradesEnabled ? 'Enabled' : 'Disabled'}<br>
+                Remote Service Control: ${status.remoteServiceControlEnabled ? 'Enabled' : 'Disabled'}
+            </p>
+        `;
+    }
+
+    if (status.ownerBindingPending) {
+        ownerDiv.innerHTML = `
+            <span class="status-badge" style="background: #f59e0b;">Unbound</span>
+            <p style="margin-top: 10px;">
+                The first destructive Central action will bind this node to that Central user.
+            </p>
+        `;
+    } else {
+        ownerDiv.innerHTML = `
+            <span class="status-badge" style="background: #10b981;">Bound</span>
+            <p style="margin-top: 10px;">
+                Owner: ${status.ownerCentralEmail || status.ownerCentralUserId || 'Unknown'}<br>
+                Bound At: ${status.ownerBoundAt ? new Date(status.ownerBoundAt).toLocaleString() : 'Unknown'}<br>
+                Source: ${status.ownerBindingSource || 'Unknown'}
+            </p>
+        `;
     }
 }
 
@@ -169,6 +195,29 @@ async function disconnect() {
     }
 }
 
+async function resetOwnerBinding() {
+    if (!confirm('Reset the stored Central owner binding? The next destructive Central action will claim ownership.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/central/owner/reset', {
+            method: 'POST'
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showMessage('Owner binding reset', 'success');
+            updateStatusDisplay(data.status);
+        } else {
+            showMessage('Error: ' + data.error, 'error');
+        }
+    } catch (error) {
+        showMessage('Error resetting owner binding: ' + error.message, 'error');
+    }
+}
+
 function showMessage(text, type) {
     const messageDiv = document.getElementById('message');
     messageDiv.textContent = text;
@@ -187,4 +236,3 @@ document.addEventListener('DOMContentLoaded', loadConfig);
 
 // Refresh status every 10 seconds
 setInterval(loadConfig, 10000);
-

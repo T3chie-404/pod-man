@@ -330,6 +330,7 @@ if (process.env.INSTALLER_MODE === 'central') {
   config.centralManagement.centralUrl = process.env.INSTALLER_CENTRAL_URL || '';
   config.centralManagement.autoConnect = true;
   config.centralManagement.centralSshHost = process.env.INSTALLER_CENTRAL_SSH_HOST || '';
+  config.centralManagement.centralSshUser = process.env.INSTALLER_CENTRAL_SSH_USER || 'ubuntu';
   config.centralManagement.sshKnownHostsPath = process.env.INSTALLER_SSH_KNOWN_HOSTS_PATH || '';
   config.centralManagement.allowRemoteSshKeyInstall = false;
 } else {
@@ -338,6 +339,7 @@ if (process.env.INSTALLER_MODE === 'central') {
   config.centralManagement.centralUrl = '';
   config.centralManagement.autoConnect = false;
   config.centralManagement.centralSshHost = '';
+  config.centralManagement.centralSshUser = 'ubuntu';
   config.centralManagement.sshKnownHostsPath = '';
   config.centralManagement.allowRemoteSshKeyInstall = false;
 }

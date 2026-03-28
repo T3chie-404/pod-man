@@ -38,7 +38,8 @@
     "enabled": false,
     "sessionSecret": "",
     "sessionTimeout": 86400000,
-    "users": []
+    "users": [],
+    "setupToken": ""
   },
   "centralManagement": {
     "enabled": false,
@@ -51,6 +52,12 @@
     "centralSshHost": "",
     "centralSshUser": "ubuntu",
     "sshKnownHostsPath": "",
-    "allowRemoteSshKeyInstall": false
+    "allowRemoteSshKeyInstall": false,
+    "ownerCentralUserId": "",
+    "ownerCentralEmail": "",
+    "ownerBoundAt": "",
+    "ownerBindingSource": "",
+    "unattendedUpgradesEnabled": true,
+    "remoteServiceControlEnabled": true
   }
 }

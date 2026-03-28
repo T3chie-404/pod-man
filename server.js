@@ -8,6 +8,8 @@ const session = require("express-session");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const os = require("os");
+const util = require("util");
+const { exec } = require("child_process");
 
 // Import our library modules
 const ServiceManager = require("./lib/services");
@@ -19,20 +21,104 @@ const terminalManager = require("./lib/terminal");
 const CentralConnector = require("./lib/central/central-connector");
 const { getComponentVersions } = require("./lib/component-versions");
 const { getPodPubkey, refreshPodPubkey } = require("./lib/pod-pubkey");
+const execPromise = util.promisify(exec);
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
 
-// Generate session secret if empty (for first-time setup)
-if (!config.authentication.sessionSecret) {
-  config.authentication.sessionSecret = crypto.randomBytes(32).toString("hex");
+function randomToken(bytes = 24) {
+  return crypto.randomBytes(bytes).toString("hex");
+}
+
+function normalizeConfig() {
+  let changed = false;
+
+  config.authentication = config.authentication || {};
+  config.authentication.users = Array.isArray(config.authentication.users) ? config.authentication.users : [];
+  if (typeof config.authentication.enabled !== "boolean") {
+    config.authentication.enabled = false;
+    changed = true;
+  }
+
+  if (!config.authentication.sessionSecret) {
+    config.authentication.sessionSecret = randomToken(32);
+    console.log("✓ Generated session secret");
+    changed = true;
+  }
+
+  if (typeof config.authentication.setupToken !== "string") {
+    config.authentication.setupToken = "";
+    changed = true;
+  }
+
+  if (config.authentication.users.length === 0 && !config.authentication.setupToken) {
+    config.authentication.setupToken = randomToken(16);
+    console.log("[Setup] Generated one-time setup token. Retrieve it from config.json or service logs before first setup.");
+    changed = true;
+  }
+
+  if (config.authentication.users.length > 0 && config.authentication.setupToken) {
+    config.authentication.setupToken = "";
+    changed = true;
+  }
+
+  if (config.authentication.users.length > 0 && !config.authentication.enabled) {
+    config.authentication.enabled = true;
+    changed = true;
+  }
+
+  config.centralManagement = config.centralManagement || {};
+  const centralDefaults = {
+    ownerCentralUserId: "",
+    ownerCentralEmail: "",
+    ownerBoundAt: "",
+    ownerBindingSource: "",
+    unattendedUpgradesEnabled: true,
+    remoteServiceControlEnabled: true
+  };
+
+  for (const [key, value] of Object.entries(centralDefaults)) {
+    if (config.centralManagement[key] === undefined) {
+      config.centralManagement[key] = value;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function saveConfig() {
   fs.writeFileSync("./config.json", JSON.stringify(config, null, 2), "utf8");
-  console.log("✓ Generated session secret");
+}
+
+if (normalizeConfig()) {
+  saveConfig();
+}
+
+if (config.authentication.users.length === 0 && config.authentication.setupToken) {
+  console.log(`[Setup] One-time setup token: ${config.authentication.setupToken}`);
 }
 
 
 // Initialize Central Connector (pass server config for dynamic pod-man port)
-const centralConnector = new CentralConnector(config.centralManagement || {}, config.server || {});
+const centralConnector = new CentralConnector(config.centralManagement || {}, config.server || {}, {
+  getCentralConfig: () => config.centralManagement || {},
+  updateCentralConfig: (patch = {}) => {
+    config.centralManagement = {
+      ...(config.centralManagement || {}),
+      ...patch
+    };
+    saveConfig();
+  },
+  auditLogger: (eventType, details = {}) => {
+    const line = JSON.stringify({
+      timestamp: new Date().toISOString(),
+      eventType,
+      ...details
+    });
+    fs.appendFileSync("./central-audit.log", `${line}\n`, "utf8");
+  }
+});
 
 // Initialize Express app
 const app = express();
@@ -106,11 +192,6 @@ app.use(checkRateLimit);
 // AUTHENTICATION HELPERS
 // ============================================================================
 
-// Save config to file
-function saveConfig() {
-  fs.writeFileSync("./config.json", JSON.stringify(config, null, 2), "utf8");
-}
-
 function getCentralHttpBaseUrl() {
   const centralUrl = config.centralManagement?.centralUrl;
 
@@ -133,6 +214,30 @@ function setAuthenticatedSession(req, sessionUser) {
   req.session.centralUserId = sessionUser.userId || null;
   req.session.centralEmail = sessionUser.email || null;
   req.session.ssoAuthenticated = Boolean(sessionUser.ssoAuthenticated);
+}
+
+async function ensureRestrictedShellUser(scriptName) {
+  await execPromise(`bash ${path.resolve("./scripts", scriptName)}`);
+}
+
+async function ensureAuxiliaryShellAccounts() {
+  const roles = new Set((config.authentication.users || []).map((user) => user.role));
+
+  if (roles.has("demo")) {
+    try {
+      await ensureRestrictedShellUser("setup-demo-user.sh");
+    } catch (error) {
+      console.error("Failed to ensure demo shell user:", error.message);
+    }
+  }
+
+  if (roles.has("standard")) {
+    try {
+      await ensureRestrictedShellUser("setup-standard-user.sh");
+    } catch (error) {
+      console.error("Failed to ensure standard shell user:", error.message);
+    }
+  }
 }
 
 // Auth middleware
@@ -193,7 +298,8 @@ function requireAdminOrStandard(req, res, next) {
 app.get("/api/setup/status", (req, res) => {
   res.json({
     success: true,
-    needsSetup: config.authentication.users.length === 0
+    needsSetup: config.authentication.users.length === 0,
+    setupTokenRequired: config.authentication.users.length === 0
   });
 });
 
@@ -207,7 +313,11 @@ app.post("/api/setup/initialize", async (req, res) => {
       return res.status(403).json({ success: false, error: "Setup already completed" });
     }
     
-    const { users } = req.body;
+    const { users, setupToken } = req.body;
+
+    if (!setupToken || setupToken !== config.authentication.setupToken) {
+      return res.status(403).json({ success: false, error: "Valid setup token required" });
+    }
     
     if (!users || !Array.isArray(users) || users.length === 0) {
       return res.status(400).json({ success: false, error: "No users provided" });
@@ -216,6 +326,7 @@ app.post("/api/setup/initialize", async (req, res) => {
     // Validate and hash passwords
     const newUsers = [];
     let hasDemoUser = false;
+    let hasStandardUser = false;
     
     for (const user of users) {
       if (!user.username || !user.password || !user.role) {
@@ -231,26 +342,30 @@ app.post("/api/setup/initialize", async (req, res) => {
       
       if (user.role === 'demo') {
         hasDemoUser = true;
+      } else if (user.role === 'standard') {
+        hasStandardUser = true;
       }
     }
     
     // Save users to config
+    config.authentication.enabled = true;
     config.authentication.users = newUsers;
+    config.authentication.setupToken = "";
     saveConfig();
     
-    // If demo user created, setup system account
-    if (hasDemoUser && !config.demoMode.systemUserCreated) {
+    if (hasDemoUser) {
       try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
-        
-        await execPromise('bash /root/pod-man/scripts/setup-demo-user.sh');
-        config.demoMode.systemUserCreated = true;
-        config.demoMode.enabled = true;
-        saveConfig();
+        await ensureRestrictedShellUser("setup-demo-user.sh");
       } catch (error) {
         console.error('Failed to setup demo user:', error);
+      }
+    }
+
+    if (hasStandardUser) {
+      try {
+        await ensureRestrictedShellUser("setup-standard-user.sh");
+      } catch (error) {
+        console.error('Failed to setup standard user:', error);
       }
     }
     
@@ -416,19 +531,17 @@ app.post("/api/users/add", requireAdmin, async (req, res) => {
     
     saveConfig();
     
-    // If first demo user, setup system account
-    if (role === 'demo' && !config.demoMode.systemUserCreated) {
+    if (role === 'demo') {
       try {
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execPromise = util.promisify(exec);
-        
-        await execPromise('bash /root/pod-man/scripts/setup-demo-user.sh');
-        config.demoMode.systemUserCreated = true;
-        config.demoMode.enabled = true;
-        saveConfig();
+        await ensureRestrictedShellUser("setup-demo-user.sh");
       } catch (error) {
         console.error('Failed to setup demo user:', error);
+      }
+    } else if (role === 'standard') {
+      try {
+        await ensureRestrictedShellUser("setup-standard-user.sh");
+      } catch (error) {
+        console.error('Failed to setup standard user:', error);
       }
     }
     
@@ -494,6 +607,24 @@ app.get("/api/users/list", requireAdmin, (req, res) => {
  * Get central connection status
  */
 app.get("/api/central/status", requireAuth, (req, res) => {
+  res.json({
+    success: true,
+    status: centralConnector.getStatus()
+  });
+});
+
+app.post("/api/central/owner/reset", requireAdmin, (req, res) => {
+  if (typeof centralConnector.audit === "function") {
+    centralConnector.audit('central-owner-reset', {
+      localAdmin: req.session.username || null
+    });
+  }
+  config.centralManagement.ownerCentralUserId = "";
+  config.centralManagement.ownerCentralEmail = "";
+  config.centralManagement.ownerBoundAt = "";
+  config.centralManagement.ownerBindingSource = "";
+  saveConfig();
+  centralConnector.updateConfig(config.centralManagement);
   res.json({
     success: true,
     status: centralConnector.getStatus()
@@ -768,7 +899,7 @@ app.get("/api/health", requireAuth, async (req, res) => {
 /**
  * Get terminal activity log
  */
-app.get("/api/terminal/activity", (req, res) => {
+app.get("/api/terminal/activity", requireAdmin, (req, res) => {
   const limit = parseInt(req.query.limit) || 100;
   const log = terminalManager.getActivityLog(limit);
   res.json({ success: true, log });
@@ -948,31 +1079,43 @@ function generateSessionId() {
 const HOST = config.server.host;
 const PORT = config.server.port;
 
-server.listen(PORT, HOST, () => {
-  console.log("");
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("  Xandeum Pod Manager (Pod-Man)");
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("");
-  console.log(`  Server:    http://${HOST}:${PORT}`);
-  console.log(`  Host:      ${HOST === "127.0.0.1" ? "Localhost only" : "Public"}`);
-  console.log(`  Security:  Rate limiting ${config.security.rateLimit.enabled ? "enabled" : "disabled"}`);
-  console.log(`  Terminal:  ${config.security.enableTerminal ? "Enabled" : "Disabled"}`);
-  console.log(`  Services:  ${config.security.enableServiceControl ? "Control enabled" : "Read-only"}`);
-  console.log("");
-  if (HOST === "127.0.0.1") {
-    console.log("  Access remotely via SSH tunnel:");
-    console.log(`  ssh -L ${PORT}:localhost:${PORT} user@your-server`);
-  }
-  console.log("");
-  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("");
-  
-  // Connect to central management server if enabled
-  if (config.centralManagement && config.centralManagement.enabled && config.centralManagement.autoConnect) {
-    console.log("[Central] Auto-connecting to central management server...");
-    centralConnector.connect();
-  }
+async function startServer() {
+  await ensureAuxiliaryShellAccounts();
+
+  server.listen(PORT, HOST, () => {
+    console.log("");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("  Xandeum Pod Manager (Pod-Man)");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("");
+    console.log(`  Server:    http://${HOST}:${PORT}`);
+    console.log(`  Host:      ${HOST === "127.0.0.1" ? "Localhost only" : "Public"}`);
+    console.log(`  Security:  Rate limiting ${config.security.rateLimit.enabled ? "enabled" : "disabled"}`);
+    console.log(`  Terminal:  ${config.security.enableTerminal ? "Enabled" : "Disabled"}`);
+    console.log(`  Services:  ${config.security.enableServiceControl ? "Control enabled" : "Read-only"}`);
+    if (config.authentication.users.length === 0 && config.authentication.setupToken) {
+      console.log(`  Setup Token: ${config.authentication.setupToken}`);
+    }
+    console.log("");
+    if (HOST === "127.0.0.1") {
+      console.log("  Access remotely via SSH tunnel:");
+      console.log(`  ssh -L ${PORT}:localhost:${PORT} user@your-server`);
+    }
+    console.log("");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("");
+    
+    // Connect to central management server if enabled
+    if (config.centralManagement && config.centralManagement.enabled && config.centralManagement.autoConnect) {
+      console.log("[Central] Auto-connecting to central management server...");
+      centralConnector.connect();
+    }
+  });
+}
+
+startServer().catch((error) => {
+  console.error("Failed to start Pod-Man:", error.message);
+  process.exit(1);
 });
 
 // Handle graceful shutdown

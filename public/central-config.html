@@ -25,6 +25,11 @@
                     <div id="connection-status">Loading...</div>
                 </div>
 
+                <div id="owner-status-section" style="margin: 20px 0;">
+                    <h3>Owner Binding</h3>
+                    <div id="owner-status">Loading...</div>
+                </div>
+
                 <hr style="margin: 30px 0; border: 1px solid var(--border-color);">
 
                 <div class="form-group">
@@ -57,6 +62,7 @@
                     <button class="btn btn-primary" onclick="saveConfiguration()">Save Configuration</button>
                     <button class="btn btn-secondary" onclick="testConnection()">Test Connection</button>
                     <button class="btn btn-danger" onclick="disconnect()">Disconnect</button>
+                    <button class="btn btn-danger" onclick="resetOwnerBinding()">Reset Owner Binding</button>
                 </div>
 
                 <div id="message" style="margin-top: 20px;"></div>
@@ -87,4 +93,3 @@
     <script src="central-config.js"></script>
 </body>
 </html>
-

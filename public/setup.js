@@ -57,6 +57,7 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
     const adminUsername = document.getElementById('admin-username').value.trim();
     const adminPassword = document.getElementById('admin-password').value;
     const adminPasswordConfirm = document.getElementById('admin-password-confirm').value;
+    const setupToken = document.getElementById('setup-token').value.trim();
     
     // Validate admin account
     if (!adminUsername || !adminPassword) {
@@ -71,6 +72,11 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
     
     if (adminPassword.length < 6) {
         showMessage('Password must be at least 6 characters', true);
+        return;
+    }
+
+    if (!setupToken) {
+        showMessage('Setup token is required', true);
         return;
     }
     
@@ -104,7 +110,7 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
         const response = await fetch('/api/setup/initialize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ users })
+            body: JSON.stringify({ users, setupToken })
         });
         
         const data = await response.json();
@@ -121,4 +127,3 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
         showMessage('Error: ' + error.message, true);
     }
 });
-

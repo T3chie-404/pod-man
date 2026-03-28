@@ -1292,6 +1292,10 @@ function initializeTerminal() {
     
     terminal.open(document.getElementById('terminal-container'));
     fitAddon.fit();
+
+    if (window.userRole === 'standard') {
+        terminal.write('\x1b[33mStandard users now receive a restricted non-root diagnostic shell.\x1b[0m\r\n');
+    }
     
     connectTerminalWebSocket();
     
@@ -1321,10 +1325,8 @@ function connectTerminalWebSocket() {
     terminalSocket.onopen = () => {
         terminal.write('\x1b[32mConnected to terminal\x1b[0m\r\n');
         
-        // Send user role to backend
         terminalSocket.send(JSON.stringify({
-            type: 'auth',
-            role: window.userRole || 'admin'
+            type: 'auth'
         }));
 
         // Send data from terminal to WebSocket
