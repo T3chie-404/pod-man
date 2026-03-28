@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Xandeum Pod Manager (Pod-Man)</title>
+    <title>Pod-Man</title>
     <link rel="stylesheet" href="style.css">
     <!-- xterm.js for terminal -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
@@ -48,7 +48,10 @@
         <!-- Header -->
         <header class="header">
             <div class="header-content">
-                <h1>⚡ Xandeum Pod Manager (Pod-Man)</h1>
+                <div class="header-title">
+                    <h1>Pod-Man</h1>
+                    <p id="header-hostname">Loading hostname...</p>
+                </div>
                 <div class="health-indicator">
                     <div class="health-info">
                         <span id="health-score">--</span>
@@ -307,10 +310,22 @@
 
         <!-- Footer -->
         <footer class="footer">
-            <p>Xandeum Pod Manager v1.1.0 | <a href="https://github.com/T3chie-404/xandeum-pod-monitor" target="_blank">GitHub</a> | Auto-refresh: <span id="refresh-countdown">10</span>s</p>
+            <p>
+                Pod-Man <span id="podman-version">v--</span> |
+                <a href="https://github.com/T3chie-404/pod-man" target="_blank" rel="noopener noreferrer">GitHub</a> |
+                <span class="footer-refresh">
+                    <span>Auto-refresh</span>
+                    <label class="switch">
+                        <input type="checkbox" id="autorefresh-toggle" checked>
+                        <span class="slider"></span>
+                    </label>
+                    <span id="refresh-status">On</span>
+                    <span id="refresh-countdown-wrap">(<span id="refresh-countdown">10</span>s)</span>
+                </span>
+            </p>
         </footer>
     </div>
 
-    <script src="app.js?v=1765738264"></script>
+    <script src="app.js?v=1765738265"></script>
 </body>
 </html>

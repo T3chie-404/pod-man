@@ -43,11 +43,23 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 20px;
 }
 
 .header h1 {
     font-size: 28px;
     color: var(--primary-color);
+}
+
+.header-title {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#header-hostname {
+    color: var(--text-secondary);
+    font-size: 14px;
 }
 
 .health-indicator {
@@ -420,6 +432,14 @@ h3 {
     font-size: 14px;
 }
 
+.footer p {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 .footer a {
     color: var(--primary-color);
     text-decoration: none;
@@ -452,6 +472,7 @@ h3 {
     .header-content {
         flex-direction: column;
         gap: 15px;
+        align-items: flex-start;
     }
     
     .card-grid {
@@ -460,6 +481,10 @@ h3 {
     
     .service-grid {
         grid-template-columns: 1fr;
+    }
+
+    .footer p {
+        gap: 8px;
     }
 }
 
@@ -491,6 +516,13 @@ h3 {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.footer-refresh {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .toggle-label {

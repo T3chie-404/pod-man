@@ -1,6 +1,6 @@
 {
   "name": "xandeum-pod-manager",
-  "version": "1.1.12",
+  "version": "1.1.14",
   "description": "Interactive web-based management dashboard for Xandeum pNodes (Pod-Man)",
   "main": "server.js",
   "scripts": {

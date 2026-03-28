@@ -7,6 +7,7 @@ const axios = require("axios");
 const session = require("express-session");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
+const os = require("os");
 
 // Import our library modules
 const ServiceManager = require("./lib/services");
@@ -566,6 +567,7 @@ app.get("/api/dashboard", requireAuth, async (req, res) => {
     res.json({
       success: true,
       timestamp: new Date().toISOString(),
+      hostname: os.hostname(),
       services,
       system,
       network,

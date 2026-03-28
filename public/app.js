@@ -4,9 +4,11 @@ let terminalSocket = null;
 let fitAddon = null;
 let refreshInterval = null;
 let refreshCountdown = 10;
+const AUTO_REFRESH_INTERVAL_SECONDS = 10;
 
 const state = {
     readOnly: true,
+    autoRefreshEnabled: true,
     graphsRange: '10m',
     charts: {},
     metrics: {
@@ -86,11 +88,11 @@ function saveMetricsCache() {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     initializeTabs();
-    initializeAutoRefresh();
     initReadOnlyToggle();
+    initializeAutoRefresh();
     loadMetricsCache();
-    loadDashboard()
-    loadCurrentPubkey();;
+    loadDashboard();
+    loadCurrentPubkey();
     
     // Setup log service selector
     const logService = document.getElementById('log-service');
@@ -173,24 +175,77 @@ function switchTab(tabName) {
 // ============================================================================
 
 function initializeAutoRefresh() {
+    const toggle = document.getElementById('autorefresh-toggle');
+    if (!toggle) return;
+
+    const savedPreference = localStorage.getItem('xpm_auto_refresh_enabled');
+    state.autoRefreshEnabled = savedPreference !== 'false';
+    toggle.checked = state.autoRefreshEnabled;
+
+    toggle.addEventListener('change', () => {
+        setAutoRefreshEnabled(toggle.checked);
+    });
+
+    setAutoRefreshEnabled(state.autoRefreshEnabled);
+}
+
+function setAutoRefreshEnabled(enabled) {
+    state.autoRefreshEnabled = enabled;
+    refreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
+    localStorage.setItem('xpm_auto_refresh_enabled', String(enabled));
+
+    if (refreshInterval) {
+        clearInterval(refreshInterval);
+        refreshInterval = null;
+    }
+
+    updateAutoRefreshDisplay();
+
+    if (!enabled) {
+        return;
+    }
+
     refreshInterval = setInterval(() => {
         refreshCountdown--;
-        document.getElementById('refresh-countdown').textContent = refreshCountdown;
+        updateAutoRefreshDisplay();
         
         if (refreshCountdown <= 0) {
-            refreshCountdown = 10;
+            refreshCountdown = AUTO_REFRESH_INTERVAL_SECONDS;
             
-            // Always collect metrics in background
             collectMetricsInBackground();
             
-            // Only refresh UI if on dashboard tab
             const activTab = document.querySelector('.tab-content.active');
             if (activTab && activTab.id === 'dashboard-tab') {
                 console.log('[Auto-refresh] Refreshing dashboard...');
                 loadDashboard();
             }
+            
+            updateAutoRefreshDisplay();
         }
     }, 1000);
+}
+
+function updateAutoRefreshDisplay() {
+    const statusEl = document.getElementById('refresh-status');
+    const countdownEl = document.getElementById('refresh-countdown');
+    const countdownWrapEl = document.getElementById('refresh-countdown-wrap');
+    const toggle = document.getElementById('autorefresh-toggle');
+
+    if (toggle) {
+        toggle.checked = state.autoRefreshEnabled;
+    }
+
+    if (statusEl) {
+        statusEl.textContent = state.autoRefreshEnabled ? 'On' : 'Off';
+    }
+
+    if (countdownEl) {
+        countdownEl.textContent = refreshCountdown;
+    }
+
+    if (countdownWrapEl) {
+        countdownWrapEl.style.display = state.autoRefreshEnabled ? 'inline' : 'none';
+    }
 }
 
 async function collectMetricsInBackground() {
@@ -305,16 +360,20 @@ async function loadVersions() {
             const versionEl = document.getElementById("version-xandminer");
             const versionEl2 = document.getElementById("version-xandminerd");
             const versionEl3 = document.getElementById("version-pod");
+            const podManVersionEl = document.getElementById("podman-version");
             
             if (versionEl) versionEl.textContent = versions.xandminer || "Unknown";
             if (versionEl2) versionEl2.textContent = versions.xandminerd || "Unknown";
             if (versionEl3) versionEl3.textContent = versions.pod || "Unknown";
+            if (podManVersionEl) podManVersionEl.textContent = versions.podMan ? `v${String(versions.podMan).replace(/^v/, '')}` : "vUnknown";
         } else {
             // Set to "Unknown" if failed
             ["version-xandminer", "version-xandminerd", "version-pod"].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.textContent = "Unknown";
             });
+            const podManVersionEl = document.getElementById("podman-version");
+            if (podManVersionEl) podManVersionEl.textContent = "vUnknown";
         }
     } catch (error) {
         console.error("Error loading versions:", error);
@@ -322,6 +381,8 @@ async function loadVersions() {
             const el = document.getElementById(id);
             if (el) el.textContent = "Error";
         });
+        const podManVersionEl = document.getElementById("podman-version");
+        if (podManVersionEl) podManVersionEl.textContent = "vError";
     }
 }
 
@@ -332,6 +393,7 @@ async function loadDashboard() {
         const data = await response.json();
         
         if (data.success) {
+            updateHeaderHostname(data.hostname || data.system?.hostname);
             updateSystemStats(data.system);
             updateServiceStatus(data.services);
             updateNetworkStatus(data.network);
@@ -352,6 +414,15 @@ async function loadDashboard() {
     } catch (error) {
         console.error('Error loading dashboard:', error);
     }
+}
+
+function updateHeaderHostname(hostname) {
+    const hostnameEl = document.getElementById('header-hostname');
+    if (!hostnameEl) return;
+
+    const displayHostname = hostname || 'Hostname unavailable';
+    hostnameEl.textContent = displayHostname;
+    document.title = hostname ? `Pod-Man | ${hostname}` : 'Pod-Man';
 }
 
 function updateSystemStats(system) {
