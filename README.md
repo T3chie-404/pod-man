@@ -1,6 +1,6 @@
 # Xandeum Pod Manager (Pod-Man)
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)
 
 Interactive web-based monitoring and management dashboard for Xandeum pNodes. Monitor services, view logs, test pRPC API, diagnose network issues, track credits, view graphs, and access an embedded terminal - all from a single, secure web interface.
