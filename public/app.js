@@ -563,7 +563,8 @@ async function forcePubkeyScan() {
         const resp = await fetch('/api/find-pubkey', { method: 'POST' });
         const data = await resp.json();
         if (data.success && data.pubkey) {
-            if (out) out.textContent = `Pubkey found: ${data.pubkey}. Refreshing credits...`;
+            const mismatchNote = data.keypairMismatch ? ' Keypair mismatch detected between live and backup paths.' : '';
+            if (out) out.textContent = `Pubkey found: ${data.pubkey}.${mismatchNote} Refreshing credits...`;
             await loadDashboardCredits();
         } else {
             if (out) out.textContent = 'Pubkey not found in recent logs.';
@@ -593,8 +594,20 @@ async function checkEligibility() {
         const html = `
             <h4>Formula: 95th Percentile × 80% Threshold</h4>
             <div class="eligibility-row">
+                <span class="eligibility-label">Detected Cluster:</span>
+                <span class="eligibility-value">${data.clusterLabel || data.cluster || 'Unknown'}</span>
+            </div>
+            <div class="eligibility-row">
+                <span class="eligibility-label">Credits Feed:</span>
+                <span class="eligibility-value">${data.creditsEndpoint || 'Unavailable'}</span>
+            </div>
+            <div class="eligibility-row">
                 <span class="eligibility-label">Your Pubkey:</span>
                 <span class="eligibility-value">${data.pubkey || 'Not found'}</span>
+            </div>
+            <div class="eligibility-row">
+                <span class="eligibility-label">Keypair Paths:</span>
+                <span class="eligibility-value">${data.pubkeyResult?.keypairMatchStatus || 'unknown'}</span>
             </div>
             <div class="eligibility-row">
                 <span class="eligibility-label">Your Credits:</span>
@@ -613,7 +626,7 @@ async function checkEligibility() {
                 <span class="eligibility-value">${data.threshold !== null ? data.threshold : '--'}</span>
             </div>
             <div class="eligibility-row">
-                <span class="eligibility-label">Eligible for DevNet:</span>
+                <span class="eligibility-label">Eligible for ${data.clusterLabel || data.cluster || 'cluster'}:</span>
                 <span class="eligibility-value">Unknown (criteria TBD)</span>
             </div>
             <div class="eligibility-row">
@@ -646,12 +659,14 @@ function renderEligibilityOutput(data) {
         return;
     }
     const parts = [];
+    if (data.clusterLabel || data.cluster) parts.push(`Cluster: ${data.clusterLabel || data.cluster}`);
     if (data.pubkey) parts.push(`Pubkey: ${data.pubkey}`);
+    if (data.pubkeyResult?.keypairMatchStatus) parts.push(`Keypair paths: ${data.pubkeyResult.keypairMatchStatus}`);
     if (data.localCredits !== null && data.localCredits !== undefined) parts.push(`My credits: ${data.localCredits}`);
     if (data.threshold !== null && data.threshold !== undefined) parts.push(`Threshold (80% of P95): ${data.threshold}`);
     if (data.maxCredits !== null && data.maxCredits !== undefined) parts.push(`Top earner: ${data.maxCredits}`);
     if (data.percentile95 !== null && data.percentile95 !== undefined) parts.push(`P95 earner: ${data.percentile95}`);
-    parts.push(`DevNet Status: Unknown (criteria TBD)`);
+    parts.push(`${data.clusterLabel || data.cluster || 'Cluster'} Status: Unknown (criteria TBD)`);
     out.textContent = parts.join(' | ');
 }
 

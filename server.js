@@ -21,6 +21,7 @@ const terminalManager = require("./lib/terminal");
 const CentralConnector = require("./lib/central/central-connector");
 const { getComponentVersions } = require("./lib/component-versions");
 const { getPodPubkey, refreshPodPubkey } = require("./lib/pod-pubkey");
+const { detectPodCluster } = require("./lib/pod-cluster");
 const execPromise = util.promisify(exec);
 
 // Load configuration
@@ -89,6 +90,62 @@ function normalizeConfig() {
 
 function saveConfig() {
   fs.writeFileSync("./config.json", JSON.stringify(config, null, 2), "utf8");
+}
+
+async function getClusterAwareCreditsSummary() {
+  const [clusterResult, pubkeyResult] = await Promise.all([
+    detectPodCluster(),
+    getPodPubkey()
+  ]);
+
+  const cluster = clusterResult.cluster || null;
+  const creditsEndpoint = clusterResult.creditsEndpoint || null;
+
+  if (!creditsEndpoint) {
+    return {
+      success: false,
+      error: cluster
+        ? `No credits endpoint is configured for cluster ${cluster}`
+        : "Unable to detect pod cluster from pod.service",
+      cluster,
+      clusterLabel: clusterResult.clusterLabel,
+      creditsEndpoint,
+      pubkey: pubkeyResult.pubkey || null,
+      pubkeyResult
+    };
+  }
+
+  const creditsResp = await axios.get(creditsEndpoint, { timeout: 5000 });
+  const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];
+  const creditsOnly = list
+    .map((entry) => entry.credits)
+    .filter((value) => typeof value === "number")
+    .sort((a, b) => a - b);
+  const count = creditsOnly.length;
+  const percentile95 = count > 0 ? creditsOnly[Math.floor(0.95 * (count - 1))] : null;
+  const threshold = percentile95 !== null ? Math.round(percentile95 * 0.8) : null;
+  const maxCredits = count > 0 ? creditsOnly[count - 1] : null;
+  const pubkey = pubkeyResult.pubkey || null;
+  const localEntry = pubkey ? list.find((entry) => entry.pod_id === pubkey) : null;
+  const localCredits = localEntry ? localEntry.credits : null;
+
+  return {
+    success: true,
+    cluster,
+    clusterLabel: clusterResult.clusterLabel,
+    creditsEndpoint,
+    leaderboardScope: clusterResult.clusterLabel,
+    pubkey,
+    pubkeyResult,
+    list,
+    localCredits,
+    percentile95,
+    threshold,
+    maxCredits,
+    eligible: threshold !== null && localCredits !== null ? localCredits >= threshold : null,
+    totalPods: count,
+    clusterDetails: clusterResult
+  };
 }
 
 if (normalizeConfig()) {
@@ -922,24 +979,36 @@ app.get("/api/pod-pubkey", requireAuth, async (req, res) => {
 });
 
 /**
+ * Detect pod cluster from pod.service configuration
+ */
+app.get("/api/pod-cluster", requireAuth, async (req, res) => {
+  try {
+    const result = await detectPodCluster();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * Credits: fetch global list and local credits (if pubkey known)
  */
 app.get("/api/pod-credits", requireAuth, async (req, res) => {
   try {
-    const [creditsResp, pubkeyResult] = await Promise.all([
-      axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
-      getPodPubkey()
-    ]);
-
-    const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];
-    const pubkey = pubkeyResult.pubkey || null;
-    const local = pubkey ? list.find(p => p.pod_id === pubkey) : null;
-
+    const summary = await getClusterAwareCreditsSummary();
+    if (!summary.success) {
+      return res.status(400).json(summary);
+    }
     res.json({
       success: true,
-      pubkey,
-      credits: local ? local.credits : null,
-      list
+      cluster: summary.cluster,
+      clusterLabel: summary.clusterLabel,
+      creditsEndpoint: summary.creditsEndpoint,
+      leaderboardScope: summary.leaderboardScope,
+      pubkey: summary.pubkey,
+      pubkeyResult: summary.pubkeyResult,
+      credits: summary.localCredits,
+      list: summary.list
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -949,31 +1018,31 @@ app.get("/api/pod-credits", requireAuth, async (req, res) => {
 /**
  * DevNet eligibility (95th percentile * 0.8 threshold)
  */
-app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {  try {    const [creditsResp, pubkeyResult] = await Promise.all([
-      axios.get("https://podcredits.xandeum.network/api/pods-credits", { timeout: 5000 }),
-      getPodPubkey()
-    ]);
-    const list = Array.isArray(creditsResp.data?.pods_credits) ? creditsResp.data.pods_credits : [];    const creditsOnly = list.map(p => p.credits).filter(c => typeof c === "number").sort((a, b) => a - b);
-    const count = creditsOnly.length;
-    const p95 = count > 0 ? creditsOnly[Math.floor(0.95 * (count - 1))] : null;
-    const threshold = p95 !== null ? Math.round(p95 * 0.8) : null;
-    const maxCredits = count > 0 ? creditsOnly[count - 1] : null;
-
-    const pubkey = pubkeyResult.pubkey || null;
-    const localEntry = pubkey ? list.find(p => p.pod_id === pubkey) : null;
-    const localCredits = localEntry ? localEntry.credits : null;    const eligible = threshold !== null && localCredits !== null ? localCredits >= threshold : null;
+app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {
+  try {
+    const summary = await getClusterAwareCreditsSummary();
+    if (!summary.success) {
+      return res.status(400).json(summary);
+    }
 
     res.json({
       success: true,
-      pubkey,
-      localCredits,
-      percentile95: p95,
-      threshold,
-      maxCredits,
-      eligible,
-      totalPods: count
+      cluster: summary.cluster,
+      clusterLabel: summary.clusterLabel,
+      creditsEndpoint: summary.creditsEndpoint,
+      leaderboardScope: summary.leaderboardScope,
+      clusterDetails: summary.clusterDetails,
+      pubkey: summary.pubkey,
+      pubkeyResult: summary.pubkeyResult,
+      localCredits: summary.localCredits,
+      percentile95: summary.percentile95,
+      threshold: summary.threshold,
+      maxCredits: summary.maxCredits,
+      eligible: summary.eligible,
+      totalPods: summary.totalPods
     });
-  } catch (error) {    res.status(500).json({ success: false, error: error.message });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
