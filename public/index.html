@@ -35,6 +35,20 @@
                 // Store user role globally
                 window.userRole = sessionData.role;
                 window.username = sessionData.username;
+                window.terminalAllowed = sessionData.role === 'admin';
+
+                const applyTerminalVisibility = () => {
+                    const terminalButton = document.querySelector('.tab-btn[data-tab="terminal"]');
+                    if (terminalButton) {
+                        terminalButton.style.display = window.terminalAllowed ? '' : 'none';
+                    }
+                };
+
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', applyTerminalVisibility, { once: true });
+                } else {
+                    applyTerminalVisibility();
+                }
                 
             } catch (error) {
                 console.error('Session check failed:', error);

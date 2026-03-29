@@ -151,9 +151,12 @@ function switchTab(tabName) {
             renderCharts();
             break;
         case 'terminal':
-            // Don't block demo users from terminal (they get demo-user shell)
-            // Only block if read-only AND not demo (admins/standard with read-only on)
-            if (window.userRole !== 'demo' && guardDangerous()) {
+            if (window.userRole !== 'admin') {
+                alert('Terminal access requires an admin session.');
+                switchTab('dashboard');
+                return;
+            }
+            if (guardDangerous()) {
                 return;
             }
             if (!terminal) {
@@ -273,12 +276,12 @@ function initReadOnlyToggle() {
     const pill = document.getElementById('readonly-status');
     if (!toggle || !pill) return;
 
-    // Demo users: lock toggle in read-only mode
-    if (window.userRole === 'demo') {
+    // Non-admin users are locked in read-only mode for public launch.
+    if (window.userRole !== 'admin') {
         toggle.checked = true;
         toggle.disabled = true;
-        toggle.title = 'Demo mode - contact admin for full access';
-        pill.textContent = 'Demo Mode';
+        toggle.title = 'Only admin sessions can disable read-only mode';
+        pill.textContent = window.userRole === 'demo' ? 'Demo Mode' : 'Read Only';
         pill.classList.remove('unprotected');
         pill.classList.add('protected');
         state.readOnly = true;
@@ -289,11 +292,6 @@ function initReadOnlyToggle() {
         });
         
         return; // Skip normal toggle behavior
-    }
-    
-    // Standard users: can use advanced features but can't manage users
-    if (window.userRole === 'standard') {
-        // Toggle works normally for standard users
     }
 
     const apply = () => {
@@ -314,14 +312,12 @@ function initReadOnlyToggle() {
 }
 
 function guardDangerous() {
-    // Demo users always blocked
-    if (window.userRole === 'demo') {
-        alert('Demo mode - this action is restricted. Contact admin for full access.');
+    // Non-admin users always blocked from destructive actions
+    if (window.userRole !== 'admin') {
+        alert('This action requires an admin session.');
         return true;
     }
-    
-    // Standard users can use advanced features (not blocked by this)
-    
+
     if (state.readOnly) {
         alert('Read-Only mode is on. Toggle off to run commands.');
         return true;
@@ -1291,6 +1287,11 @@ function displayNetworkDiagnostics(diagnostics) {
 // ============================================================================
 
 function initializeTerminal() {
+    if (window.userRole !== 'admin') {
+        alert('Terminal access requires an admin session.');
+        return;
+    }
+
     terminal = new Terminal({
         cursorBlink: true,
         fontSize: 14,
@@ -1307,10 +1308,6 @@ function initializeTerminal() {
     
     terminal.open(document.getElementById('terminal-container'));
     fitAddon.fit();
-
-    if (window.userRole === 'standard') {
-        terminal.write('\x1b[33mStandard users now receive a restricted non-root diagnostic shell.\x1b[0m\r\n');
-    }
     
     connectTerminalWebSocket();
     

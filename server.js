@@ -23,6 +23,7 @@ const { getComponentVersions } = require("./lib/component-versions");
 const { getPodPubkey, refreshPodPubkey } = require("./lib/pod-pubkey");
 const { detectPodCluster } = require("./lib/pod-cluster");
 const execPromise = util.promisify(exec);
+const ALLOWED_POD_MAN_ROLES = new Set(["admin", "standard", "demo"]);
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
@@ -273,6 +274,33 @@ function setAuthenticatedSession(req, sessionUser) {
   req.session.ssoAuthenticated = Boolean(sessionUser.ssoAuthenticated);
 }
 
+function isAllowedPodManRole(role) {
+  return ALLOWED_POD_MAN_ROLES.has(String(role || "").trim().toLowerCase());
+}
+
+function normalizePodManRole(role) {
+  return String(role || "").trim().toLowerCase();
+}
+
+function assertAllowedPodManRole(role) {
+  const normalized = normalizePodManRole(role);
+  if (!isAllowedPodManRole(normalized)) {
+    throw new Error(`Unsupported role: ${role || "missing"}`);
+  }
+  return normalized;
+}
+
+function establishAuthenticatedSession(req, sessionUser, callback) {
+  req.session.regenerate((error) => {
+    if (error) {
+      callback(error);
+      return;
+    }
+    setAuthenticatedSession(req, sessionUser);
+    req.session.save(callback);
+  });
+}
+
 async function ensureRestrictedShellUser(scriptName) {
   await execPromise(`bash ${path.resolve("./scripts", scriptName)}`);
 }
@@ -333,8 +361,8 @@ function requireAdminOrStandard(req, res, next) {
     return res.status(401).json({ success: false, error: "Not authenticated" });
   }
   
-  if (req.session.role === "demo") {
-    return res.status(403).json({ success: false, error: "Demo users cannot perform this action" });
+  if (!["admin", "standard"].includes(req.session.role)) {
+    return res.status(403).json({ success: false, error: "This role cannot perform that action" });
   }
   
   // Allow admin and standard
@@ -389,17 +417,24 @@ app.post("/api/setup/initialize", async (req, res) => {
       if (!user.username || !user.password || !user.role) {
         return res.status(400).json({ success: false, error: "Invalid user data" });
       }
+
+      let normalizedRole;
+      try {
+        normalizedRole = assertAllowedPodManRole(user.role);
+      } catch (error) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
       
       const hashedPassword = await bcrypt.hash(user.password, 10);
       newUsers.push({
         username: user.username,
         password: hashedPassword,
-        role: user.role
+        role: normalizedRole
       });
       
-      if (user.role === 'demo') {
+      if (normalizedRole === 'demo') {
         hasDemoUser = true;
-      } else if (user.role === 'standard') {
+      } else if (normalizedRole === 'standard') {
         hasStandardUser = true;
       }
     }
@@ -448,6 +483,10 @@ app.post("/api/login", async (req, res) => {
     if (!user) {
       return res.status(401).json({ success: false, error: "Invalid credentials" });
     }
+
+    if (!isAllowedPodManRole(user.role)) {
+      return res.status(403).json({ success: false, error: "This account has an unsupported role. Contact a local admin." });
+    }
     
     const validPassword = await bcrypt.compare(password, user.password);
     
@@ -455,14 +494,22 @@ app.post("/api/login", async (req, res) => {
       return res.status(401).json({ success: false, error: "Invalid credentials" });
     }
     
-    // Create session
-    req.session.username = user.username;
-    req.session.role = user.role;
-    
-    res.json({
-      success: true,
+    establishAuthenticatedSession(req, {
       username: user.username,
-      role: user.role
+      role: user.role,
+      userId: null,
+      email: null,
+      ssoAuthenticated: false
+    }, (error) => {
+      if (error) {
+        return res.status(500).json({ success: false, error: "Failed to establish session" });
+      }
+
+      res.json({
+        success: true,
+        username: user.username,
+        role: user.role
+      });
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -539,19 +586,25 @@ app.get("/sso/central", async (req, res) => {
 
     const sessionUser = response.data?.sessionUser;
 
-    if (!response.data?.success || !sessionUser?.username || !sessionUser?.role) {
+    const normalizedRole = normalizePodManRole(sessionUser?.role);
+
+    if (!response.data?.success || !sessionUser?.username || !normalizedRole || !isAllowedPodManRole(normalizedRole)) {
       console.error("[Central-SSO] Rejecting session: invalid session user payload");
       return res.status(401).send("Central SSO was rejected.");
     }
 
-    setAuthenticatedSession(req, sessionUser);
-    return req.session.save((error) => {
+    const sanitizedSessionUser = {
+      ...sessionUser,
+      role: normalizedRole
+    };
+
+    return establishAuthenticatedSession(req, sanitizedSessionUser, (error) => {
       if (error) {
         console.error("[Central-SSO] Failed to save session:", error.message);
         return res.status(500).send("Failed to establish pod-man session.");
       }
 
-      console.log(`[Central-SSO] Session established for ${sessionUser.username}`);
+      console.log(`[Central-SSO] Session established for ${sanitizedSessionUser.username}`);
       res.redirect("/");
     });
   } catch (error) {
@@ -577,24 +630,31 @@ app.post("/api/users/add", requireAdmin, async (req, res) => {
     if (config.authentication.users.find(u => u.username === username)) {
       return res.status(400).json({ success: false, error: "Username already exists" });
     }
+
+    let normalizedRole;
+    try {
+      normalizedRole = assertAllowedPodManRole(role);
+    } catch (error) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     
     // Hash password and add user
     const hashedPassword = await bcrypt.hash(password, 10);
     config.authentication.users.push({
       username,
       password: hashedPassword,
-      role
+      role: normalizedRole
     });
     
     saveConfig();
     
-    if (role === 'demo') {
+    if (normalizedRole === 'demo') {
       try {
         await ensureRestrictedShellUser("setup-demo-user.sh");
       } catch (error) {
         console.error('Failed to setup demo user:', error);
       }
-    } else if (role === 'standard') {
+    } else if (normalizedRole === 'standard') {
       try {
         await ensureRestrictedShellUser("setup-standard-user.sh");
       } catch (error) {
@@ -793,7 +853,7 @@ app.get("/api/services/:name", requireAuth, async (req, res) => {
 /**
  * Control a service (start/stop/restart)
  */
-app.post("/api/services/:name/:action", requireAdminOrStandard, async (req, res) => {
+app.post("/api/services/:name/:action", requireAdmin, async (req, res) => {
   if (!config.security.enableServiceControl) {
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
@@ -812,7 +872,7 @@ app.post("/api/services/:name/:action", requireAdminOrStandard, async (req, res)
 /**
  * Restart all services
  */
-app.post("/api/services/restart-all", requireAdminOrStandard, async (req, res) => {
+app.post("/api/services/restart-all", requireAdmin, async (req, res) => {
   if (!config.security.enableServiceControl) {
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
@@ -846,7 +906,7 @@ app.get("/api/logs/:service", requireAuth, async (req, res) => {
 /**
  * Find pubkey (restart pod and extract from logs)
  */
-app.post("/api/find-pubkey", requireAdminOrStandard, async (req, res) => {
+app.post("/api/find-pubkey", requireAdmin, async (req, res) => {
   try {
     const result = await refreshPodPubkey();
     res.json(result);
@@ -1058,6 +1118,11 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
+    if (req.session.role !== "admin") {
+      ws.close(1008, "Terminal access requires an admin session");
+      return;
+    }
+
     const sessionId = generateSessionId();
     let ptyProcess = null;
     let sessionCreated = false;
@@ -1071,7 +1136,7 @@ wss.on("connection", (ws, req) => {
 
         // Create the terminal session from the authenticated server session only.
         if (message.type === "auth" && !sessionCreated) {
-          const userRole = req.session.role || "demo";
+          const userRole = req.session.role || "standard";
 
           try {
             ptyProcess = terminalManager.createSession(sessionId, 80, 24, userRole);
