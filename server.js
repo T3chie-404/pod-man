@@ -24,6 +24,7 @@ const { getPodPubkey, refreshPodPubkey } = require("./lib/pod-pubkey");
 const { detectPodCluster } = require("./lib/pod-cluster");
 const execPromise = util.promisify(exec);
 const ALLOWED_POD_MAN_ROLES = new Set(["admin", "standard", "demo"]);
+const LOCAL_AUDIT_LOG_PATH = path.resolve("./pod-man-audit.log");
 
 // Load configuration
 const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
@@ -91,6 +92,67 @@ function normalizeConfig() {
 
 function saveConfig() {
   fs.writeFileSync("./config.json", JSON.stringify(config, null, 2), "utf8");
+}
+
+function normalizeLocalAuditOutcome(value) {
+  const normalized = String(value || "success").trim().toLowerCase();
+  return ["success", "failed", "denied"].includes(normalized) ? normalized : "success";
+}
+
+function buildLocalAuditActor(req) {
+  return {
+    username: req?.session?.username || null,
+    role: req?.session?.role || null,
+    centralUserId: req?.session?.centralUserId || null,
+    centralEmail: req?.session?.centralEmail || null,
+    ssoAuthenticated: Boolean(req?.session?.ssoAuthenticated)
+  };
+}
+
+function logLocalAuditEvent(eventType, {
+  req = null,
+  outcome = "success",
+  summary = "",
+  details = {}
+} = {}) {
+  try {
+    const entry = {
+      timestamp: new Date().toISOString(),
+      eventType,
+      outcome: normalizeLocalAuditOutcome(outcome),
+      summary: summary || null,
+      actor: buildLocalAuditActor(req),
+      ipAddress: req?.ip || req?.socket?.remoteAddress || null,
+      userAgent: req?.get?.("user-agent") || req?.headers?.["user-agent"] || null,
+      details
+    };
+    fs.appendFileSync(LOCAL_AUDIT_LOG_PATH, `${JSON.stringify(entry)}\n`, "utf8");
+  } catch (error) {
+    console.error("[Audit] Failed to write local audit entry:", error.message);
+  }
+}
+
+function getAllowedDirectTerminalOrigins(req) {
+  const port = Number(config.server?.port || 7000);
+  const allowed = new Set();
+
+  for (const host of ["127.0.0.1", "localhost"]) {
+    allowed.add(`http://${host}:${port}`);
+    allowed.add(`https://${host}:${port}`);
+  }
+
+  const requestHost = String(req?.headers?.host || "").trim();
+  if (requestHost) {
+    allowed.add(`http://${requestHost}`);
+    allowed.add(`https://${requestHost}`);
+  }
+
+  return allowed;
+}
+
+function isAllowedDirectTerminalOrigin(req) {
+  const origin = String(req?.headers?.origin || "").trim();
+  return origin ? getAllowedDirectTerminalOrigins(req).has(origin) : false;
 }
 
 async function getClusterAwareCreditsSummary() {
@@ -180,12 +242,43 @@ const centralConnector = new CentralConnector(config.centralManagement || {}, co
 
 // Initialize Express app
 const app = express();
+app.set("trust proxy", "loopback");
 const server = http.createServer(app);
 const wss = new WebSocket.Server({
   server,
   verifyClient: (info, callback) => {
-    // We'll handle auth in the connection handler
-    callback(true);
+    try {
+      const requestPath = new URL(info.req.url || "/", "http://localhost").pathname;
+      if (requestPath !== "/terminal") {
+        logLocalAuditEvent("podman_terminal_denied", {
+          req: info.req,
+          outcome: "denied",
+          summary: "Terminal websocket denied before upgrade",
+          details: { reason: "invalid-terminal-path", path: requestPath }
+        });
+        callback(false, 404, "Not found");
+        return;
+      }
+
+      if (!isAllowedDirectTerminalOrigin(info.req)) {
+        logLocalAuditEvent("podman_terminal_denied", {
+          req: info.req,
+          outcome: "denied",
+          summary: "Terminal websocket denied before upgrade",
+          details: {
+            reason: "origin-denied",
+            origin: info.req.headers?.origin || null,
+            allowedOrigins: Array.from(getAllowedDirectTerminalOrigins(info.req))
+          }
+        });
+        callback(false, 403, "Terminal origin denied");
+        return;
+      }
+
+      callback(true);
+    } catch (error) {
+      callback(false, 400, "Invalid terminal upgrade request");
+    }
   }
 });
 
@@ -201,10 +294,12 @@ const sessionMiddleware = session({
   secret: config.authentication.sessionSecret,
   resave: false,
   saveUninitialized: false,
+  proxy: true,
   cookie: {
     maxAge: config.authentication.sessionTimeout,
     httpOnly: true,
-    secure: false // Set to true if using HTTPS
+    sameSite: "strict",
+    secure: "auto"
   }
 });
 app.use(sessionMiddleware);
@@ -481,16 +576,34 @@ app.post("/api/login", async (req, res) => {
     const user = config.authentication.users.find(u => u.username === username);
     
     if (!user) {
+      logLocalAuditEvent("podman_local_login_failure", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man login failed",
+        details: { username: username || null, reason: "unknown-user" }
+      });
       return res.status(401).json({ success: false, error: "Invalid credentials" });
     }
 
     if (!isAllowedPodManRole(user.role)) {
+      logLocalAuditEvent("podman_local_login_failure", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man login rejected",
+        details: { username: user.username, reason: "unsupported-role", role: user.role || null }
+      });
       return res.status(403).json({ success: false, error: "This account has an unsupported role. Contact a local admin." });
     }
     
     const validPassword = await bcrypt.compare(password, user.password);
     
     if (!validPassword) {
+      logLocalAuditEvent("podman_local_login_failure", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man login failed",
+        details: { username: user.username, reason: "invalid-password" }
+      });
       return res.status(401).json({ success: false, error: "Invalid credentials" });
     }
     
@@ -502,8 +615,20 @@ app.post("/api/login", async (req, res) => {
       ssoAuthenticated: false
     }, (error) => {
       if (error) {
+        logLocalAuditEvent("podman_local_login_failure", {
+          req,
+          outcome: "failed",
+          summary: "Pod-Man login session establishment failed",
+          details: { username: user.username, reason: error.message }
+        });
         return res.status(500).json({ success: false, error: "Failed to establish session" });
       }
+
+      logLocalAuditEvent("podman_local_login_success", {
+        req,
+        summary: "Pod-Man local login succeeded",
+        details: { username: user.username, role: user.role }
+      });
 
       res.json({
         success: true,
@@ -554,14 +679,32 @@ app.get("/sso/central", async (req, res) => {
   const token = typeof req.query.token === "string" ? req.query.token.trim() : "";
 
   if (!config.centralManagement?.enabled || !config.centralManagement?.apiKey) {
+    logLocalAuditEvent("podman_sso_failure", {
+      req,
+      outcome: "denied",
+      summary: "Central SSO rejected",
+      details: { reason: "central-sso-not-configured" }
+    });
     return res.status(503).send("Central SSO is not configured on this pNode.");
   }
 
   if (!token) {
+    logLocalAuditEvent("podman_sso_failure", {
+      req,
+      outcome: "denied",
+      summary: "Central SSO rejected",
+      details: { reason: "missing-token" }
+    });
     return res.status(400).send("Missing SSO token.");
   }
 
   if (!centralConnector.pnodeId) {
+    logLocalAuditEvent("podman_sso_failure", {
+      req,
+      outcome: "denied",
+      summary: "Central SSO rejected",
+      details: { reason: "pnode-not-registered" }
+    });
     return res.status(503).send("This pNode is not registered with Central yet.");
   }
 
@@ -590,6 +733,12 @@ app.get("/sso/central", async (req, res) => {
 
     if (!response.data?.success || !sessionUser?.username || !normalizedRole || !isAllowedPodManRole(normalizedRole)) {
       console.error("[Central-SSO] Rejecting session: invalid session user payload");
+      logLocalAuditEvent("podman_sso_failure", {
+        req,
+        outcome: "denied",
+        summary: "Central SSO rejected",
+        details: { reason: "invalid-session-user-payload" }
+      });
       return res.status(401).send("Central SSO was rejected.");
     }
 
@@ -601,16 +750,38 @@ app.get("/sso/central", async (req, res) => {
     return establishAuthenticatedSession(req, sanitizedSessionUser, (error) => {
       if (error) {
         console.error("[Central-SSO] Failed to save session:", error.message);
+        logLocalAuditEvent("podman_sso_failure", {
+          req,
+          outcome: "failed",
+          summary: "Central SSO session establishment failed",
+          details: { reason: error.message, username: sanitizedSessionUser.username }
+        });
         return res.status(500).send("Failed to establish pod-man session.");
       }
 
       console.log(`[Central-SSO] Session established for ${sanitizedSessionUser.username}`);
+      logLocalAuditEvent("podman_sso_success", {
+        req,
+        summary: "Central SSO succeeded",
+        details: {
+          username: sanitizedSessionUser.username,
+          role: sanitizedSessionUser.role,
+          centralUserId: sanitizedSessionUser.userId || null,
+          centralEmail: sanitizedSessionUser.email || null
+        }
+      });
       res.redirect("/");
     });
   } catch (error) {
     const status = error.response?.status || 500;
     const message = error.response?.data?.error || error.message;
     console.error("[Central-SSO] Consume failed:", message);
+    logLocalAuditEvent("podman_sso_failure", {
+      req,
+      outcome: status >= 500 ? "failed" : "denied",
+      summary: "Central SSO consume failed",
+      details: { reason: message, status }
+    });
     return res.status(status).send(`Central SSO failed: ${message}`);
   }
 });
@@ -623,11 +794,23 @@ app.post("/api/users/add", requireAdmin, async (req, res) => {
     const { username, password, role } = req.body;
     
     if (!username || !password || !role) {
+      logLocalAuditEvent("podman_user_add", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man user creation rejected",
+        details: { reason: "missing-fields", username: username || null, role: role || null }
+      });
       return res.status(400).json({ success: false, error: "Username, password, and role required" });
     }
     
     // Check if user exists
     if (config.authentication.users.find(u => u.username === username)) {
+      logLocalAuditEvent("podman_user_add", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man user creation rejected",
+        details: { reason: "username-exists", username }
+      });
       return res.status(400).json({ success: false, error: "Username already exists" });
     }
 
@@ -635,6 +818,12 @@ app.post("/api/users/add", requireAdmin, async (req, res) => {
     try {
       normalizedRole = assertAllowedPodManRole(role);
     } catch (error) {
+      logLocalAuditEvent("podman_user_add", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man user creation rejected",
+        details: { reason: error.message, username, role }
+      });
       return res.status(400).json({ success: false, error: error.message });
     }
     
@@ -662,8 +851,19 @@ app.post("/api/users/add", requireAdmin, async (req, res) => {
       }
     }
     
+    logLocalAuditEvent("podman_user_added", {
+      req,
+      summary: "Pod-Man user added",
+      details: { username, role: normalizedRole }
+    });
     res.json({ success: true, message: "User added" });
   } catch (error) {
+    logLocalAuditEvent("podman_user_add", {
+      req,
+      outcome: "failed",
+      summary: "Pod-Man user creation failed",
+      details: { username: req.body?.username || null, reason: error.message }
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -676,11 +876,23 @@ app.post("/api/users/delete", requireAdmin, (req, res) => {
     const { username } = req.body;
     
     if (!username) {
+      logLocalAuditEvent("podman_user_delete", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man user deletion rejected",
+        details: { reason: "missing-username" }
+      });
       return res.status(400).json({ success: false, error: "Username required" });
     }
     
     // Don't allow deleting yourself
     if (username === req.session.username) {
+      logLocalAuditEvent("podman_user_delete", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man user deletion rejected",
+        details: { username, reason: "cannot-delete-self" }
+      });
       return res.status(400).json({ success: false, error: "Cannot delete your own account" });
     }
     
@@ -689,6 +901,12 @@ app.post("/api/users/delete", requireAdmin, (req, res) => {
     const userToDelete = config.authentication.users.find(u => u.username === username);
     
     if (userToDelete && userToDelete.role === 'admin' && admins.length <= 1) {
+      logLocalAuditEvent("podman_user_delete", {
+        req,
+        outcome: "denied",
+        summary: "Pod-Man user deletion rejected",
+        details: { username, reason: "last-admin-protection" }
+      });
       return res.status(400).json({ success: false, error: "Cannot delete last admin user" });
     }
     
@@ -696,8 +914,19 @@ app.post("/api/users/delete", requireAdmin, (req, res) => {
     config.authentication.users = config.authentication.users.filter(u => u.username !== username);
     saveConfig();
     
+    logLocalAuditEvent("podman_user_deleted", {
+      req,
+      summary: "Pod-Man user deleted",
+      details: { username }
+    });
     res.json({ success: true, message: "User deleted" });
   } catch (error) {
+    logLocalAuditEvent("podman_user_delete", {
+      req,
+      outcome: "failed",
+      summary: "Pod-Man user deletion failed",
+      details: { username: req.body?.username || null, reason: error.message }
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -742,6 +971,10 @@ app.post("/api/central/owner/reset", requireAdmin, (req, res) => {
   config.centralManagement.ownerBindingSource = "";
   saveConfig();
   centralConnector.updateConfig(config.centralManagement);
+  logLocalAuditEvent("podman_central_owner_reset", {
+    req,
+    summary: "Central owner binding reset locally"
+  });
   res.json({
     success: true,
     status: centralConnector.getStatus()
@@ -754,28 +987,44 @@ app.post("/api/central/owner/reset", requireAdmin, (req, res) => {
 app.post("/api/central/configure", requireAdmin, async (req, res) => {
   try {
     const { enabled, apiKey, centralUrl, autoConnect } = req.body;
+    const changed = {};
     
     // Update config file
     if (apiKey !== undefined) {
       config.centralManagement.apiKey = apiKey;
+      changed.apiKeyUpdated = true;
     }
     if (centralUrl !== undefined) {
       config.centralManagement.centralUrl = centralUrl;
+      changed.centralUrl = centralUrl;
     }
     if (enabled !== undefined) {
       config.centralManagement.enabled = enabled;
+      changed.enabled = Boolean(enabled);
     }
     if (autoConnect !== undefined) {
       config.centralManagement.autoConnect = autoConnect;
+      changed.autoConnect = Boolean(autoConnect);
     }
     
     saveConfig();
     
     // Update connector
     centralConnector.updateConfig(config.centralManagement);
+    logLocalAuditEvent("podman_central_config_updated", {
+      req,
+      summary: "Central configuration updated locally",
+      details: changed
+    });
     
     res.json({ success: true, status: centralConnector.getStatus() });
   } catch (error) {
+    logLocalAuditEvent("podman_central_config_updated", {
+      req,
+      outcome: "failed",
+      summary: "Central configuration update failed",
+      details: { reason: error.message }
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -786,8 +1035,18 @@ app.post("/api/central/configure", requireAdmin, async (req, res) => {
 app.post("/api/central/connect", requireAdmin, async (req, res) => {
   try {
     await centralConnector.connect();
+    logLocalAuditEvent("podman_central_connect", {
+      req,
+      summary: "Central connection initiated locally"
+    });
     res.json({ success: true, status: centralConnector.getStatus() });
   } catch (error) {
+    logLocalAuditEvent("podman_central_connect", {
+      req,
+      outcome: "failed",
+      summary: "Central connection failed",
+      details: { reason: error.message }
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -797,6 +1056,10 @@ app.post("/api/central/connect", requireAdmin, async (req, res) => {
  */
 app.post("/api/central/disconnect", requireAdmin, (req, res) => {
   centralConnector.disconnect();
+  logLocalAuditEvent("podman_central_disconnect", {
+    req,
+    summary: "Central connection disconnected locally"
+  });
   res.json({ success: true, status: centralConnector.getStatus() });
 });
 
@@ -855,6 +1118,12 @@ app.get("/api/services/:name", requireAuth, async (req, res) => {
  */
 app.post("/api/services/:name/:action", requireAdmin, async (req, res) => {
   if (!config.security.enableServiceControl) {
+    logLocalAuditEvent("podman_service_control", {
+      req,
+      outcome: "denied",
+      summary: "Pod-Man service control denied",
+      details: { service: req.params.name, action: req.params.action, reason: "service-control-disabled" }
+    });
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
   
@@ -863,8 +1132,19 @@ app.post("/api/services/:name/:action", requireAdmin, async (req, res) => {
       req.params.name,
       req.params.action
     );
+    logLocalAuditEvent("podman_service_control", {
+      req,
+      summary: "Pod-Man service control executed",
+      details: { service: req.params.name, action: req.params.action }
+    });
     res.json(result);
   } catch (error) {
+    logLocalAuditEvent("podman_service_control", {
+      req,
+      outcome: "failed",
+      summary: "Pod-Man service control failed",
+      details: { service: req.params.name, action: req.params.action, reason: error.message }
+    });
     res.status(400).json({ success: false, error: error.message });
   }
 });
@@ -874,13 +1154,29 @@ app.post("/api/services/:name/:action", requireAdmin, async (req, res) => {
  */
 app.post("/api/services/restart-all", requireAdmin, async (req, res) => {
   if (!config.security.enableServiceControl) {
+    logLocalAuditEvent("podman_restart_all", {
+      req,
+      outcome: "denied",
+      summary: "Restart-all denied",
+      details: { reason: "service-control-disabled" }
+    });
     return res.status(403).json({ success: false, error: "Service control is disabled" });
   }
   
   try {
     const results = await ServiceManager.restartAll();
+    logLocalAuditEvent("podman_restart_all", {
+      req,
+      summary: "Restarted all managed services"
+    });
     res.json({ success: true, results });
   } catch (error) {
+    logLocalAuditEvent("podman_restart_all", {
+      req,
+      outcome: "failed",
+      summary: "Restart-all failed",
+      details: { reason: error.message }
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -909,8 +1205,22 @@ app.get("/api/logs/:service", requireAuth, async (req, res) => {
 app.post("/api/find-pubkey", requireAdmin, async (req, res) => {
   try {
     const result = await refreshPodPubkey();
+    logLocalAuditEvent("podman_pubkey_refresh", {
+      req,
+      summary: "Pod-Man pubkey refresh executed",
+      details: {
+        pubkey: result?.pubkey || null,
+        success: result?.success !== false
+      }
+    });
     res.json(result);
   } catch (error) {
+    logLocalAuditEvent("podman_pubkey_refresh", {
+      req,
+      outcome: "failed",
+      summary: "Pod-Man pubkey refresh failed",
+      details: { reason: error.message }
+    });
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1108,17 +1418,35 @@ app.get("/api/devnet-eligibility", requireAuth, async (req, res) => {
 
 wss.on("connection", (ws, req) => {
   if (!config.security.enableTerminal) {
+    logLocalAuditEvent("podman_terminal_denied", {
+      req,
+      outcome: "denied",
+      summary: "Terminal denied",
+      details: { reason: "terminal-disabled" }
+    });
     ws.close(1008, "Terminal access is disabled");
     return;
   }
 
   sessionMiddleware(req, {}, () => {
     if (!req.session || !req.session.username) {
+      logLocalAuditEvent("podman_terminal_denied", {
+        req,
+        outcome: "denied",
+        summary: "Terminal denied",
+        details: { reason: "not-authenticated" }
+      });
       ws.close(1008, "Authentication required");
       return;
     }
 
     if (req.session.role !== "admin") {
+      logLocalAuditEvent("podman_terminal_denied", {
+        req,
+        outcome: "denied",
+        summary: "Terminal denied",
+        details: { reason: "admin-session-required", role: req.session.role || null }
+      });
       ws.close(1008, "Terminal access requires an admin session");
       return;
     }
@@ -1128,6 +1456,11 @@ wss.on("connection", (ws, req) => {
     let sessionCreated = false;
 
     console.log(`[Terminal] New connection: ${sessionId}`);
+    logLocalAuditEvent("podman_terminal_opened", {
+      req,
+      summary: "Terminal websocket opened",
+      details: { sessionId }
+    });
 
     // Handle incoming data from WebSocket
     ws.on("message", (data) => {
@@ -1164,6 +1497,12 @@ wss.on("connection", (ws, req) => {
 
             console.log(`[Terminal] Session created for role: ${userRole}`);
           } catch (error) {
+            logLocalAuditEvent("podman_terminal_denied", {
+              req,
+              outcome: "failed",
+              summary: "Terminal session creation failed",
+              details: { sessionId, reason: error.message, role: userRole }
+            });
             console.error(`[Terminal] Error creating session: ${error.message}`);
             ws.send(`Error: ${error.message}\r\n`);
             ws.close();
@@ -1185,6 +1524,11 @@ wss.on("connection", (ws, req) => {
     ws.on("close", () => {
       console.log(`[Terminal] Connection closed: ${sessionId}`);
       terminalManager.closeSession(sessionId);
+      logLocalAuditEvent("podman_terminal_closed", {
+        req,
+        summary: "Terminal websocket closed",
+        details: { sessionId }
+      });
     });
 
     // Handle WebSocket error

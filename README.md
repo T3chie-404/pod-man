@@ -1,9 +1,9 @@
 # Xandeum Pod Manager (Pod-Man)
 
-![Version](https://img.shields.io/badge/version-1.2.3--rc.1-blue.svg)
+![Version](https://img.shields.io/badge/version-1.2.3--rc.2-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)
 
-Interactive web-based monitoring and management dashboard for Xandeum pNodes. Monitor services, view logs, test pRPC API, diagnose network issues, track credits, view graphs, and access an embedded terminal - all from a single, secure web interface.
+Interactive web-based monitoring and management dashboard for Xandeum pNodes. Monitor services, view logs, test pRPC API, diagnose network issues, track credits, view graphs, and, for local admin recovery, access an embedded terminal.
 
 ## Features
 
@@ -31,7 +31,7 @@ Interactive web-based monitoring and management dashboard for Xandeum pNodes. Mo
 - Start/Stop/Restart individual services
 - View detailed service logs
 - **Read-only safety toggle**: Protects against accidental service changes
-- **Role-based permissions**: Standard users can control services, demo users cannot
+- **Role-based permissions**: Service control is admin-only
 
 ### 📜 Log Viewer
 - View logs for any service with line selector pills (100, 2k, 5k, 10k lines)
@@ -59,8 +59,8 @@ Interactive web-based monitoring and management dashboard for Xandeum pNodes. Mo
 
 ### 💻 Embedded Terminal
 - Full interactive terminal using xterm.js
-- **Role-based access**: Admin and standard users get root shell, demo users get restricted shell
-- **Read-only guard**: Terminal access blocked when safety toggle is on
+- **Role-based access**: Admin-only
+- **Recovery-focused**: Intended for localhost or SSH-port-forward recovery, not direct remote exposure
 - Session management with timeouts
 
 ## Installation
@@ -100,18 +100,17 @@ install.sh
 - **Central mode**: Uses an existing Pod-Man Central API key and `wss://.../agent-connect`, enables auto-connect, and verifies the pNode registers during install.
 - **Local-only mode**: Keeps Pod-Man on `127.0.0.1` and prompts for a local port, default `7000`.
 
-### HTTPS Options
+### Access Model
 
-- **Self-signed / IP-based**: Works immediately and is suitable for private or operator-only access, but browsers will show a warning.
-- **Let's Encrypt / FQDN-based**: Requires a real domain name pointing at the server and allows trusted public HTTPS.
-
-Pod-Man itself should remain bound to `127.0.0.1`; nginx is the supported v1 public-access path when HTTPS is enabled.
+- **Managed nodes**: Access Pod-Man remotely through Pod-Man Central.
+- **Local recovery**: Use `http://127.0.0.1:<port>` on-node or SSH port forwarding.
+- **Direct public HTTPS exposure**: Not supported for the release candidate.
 
 ### First-Time Setup
 
 1. **Access the setup page**:
    - Local-only: navigate to `http://127.0.0.1:<your-port>` or use an SSH tunnel
-   - HTTPS mode: navigate to `https://YOUR-IP:443` or `https://YOUR-FQDN:443`
+   - Central-managed nodes: use Pod-Man Central for remote access
 
 2. **Create admin account**: 
    - You'll see the setup page automatically on first visit
@@ -176,18 +175,21 @@ http://localhost:7000
 
 If you chose a different local port during install, replace `7000` with that port.
 
-### Public Access with HTTPS (Optional)
+### Remote Recovery
+
+For managed nodes, use Pod-Man Central for remote access.
+
+If Central is unavailable, use SSH port forwarding instead of exposing Pod-Man directly:
 
 ```bash
-cd /root/pod-man
-sudo bash setup-https.sh
+ssh -L 7000:localhost:7000 user@your-server
 ```
 
-Then choose:
-- `Self-signed` for IP-based HTTPS
-- `Let's Encrypt` for FQDN-based trusted HTTPS
+Then open:
 
-Trusted public HTTPS requires a real FQDN. IP-only HTTPS is supported only with a self-signed certificate.
+```text
+http://localhost:7000
+```
 
 ## Security Considerations
 
@@ -195,7 +197,7 @@ Trusted public HTTPS requires a real FQDN. IP-only HTTPS is supported only with 
 
 - **Passwords**: Hashed with bcrypt (cost factor 10)
 - **Session secrets**: Randomly generated 64-character hex
-- **Session cookies**: HttpOnly, secure (if HTTPS)
+- **Session cookies**: HttpOnly, `SameSite=Strict`, secure when served over HTTPS/tunnel
 - **No default credentials**: Must create admin on first setup
 - **Cannot delete last admin**: Prevents lockout
 
@@ -206,12 +208,12 @@ Trusted public HTTPS requires a real FQDN. IP-only HTTPS is supported only with 
 - **Input sanitization**: All user inputs validated
 - **Command whitelist**: Only approved services/actions
 - **Read-only toggle**: Defaults to protected mode
-- **Terminal restrictions**: Demo users get restricted shell
+- **Terminal restrictions**: Terminal access is admin-only
 
 ### ⚠️ Security Best Practices
 
 1. **Use strong passwords** for admin accounts
-2. **Enable HTTPS** if exposing publicly
+2. **Use Central or SSH port forwarding** for remote recovery
 3. **Keep read-only toggle ON** when not making changes
 4. **Review audit logs** regularly
 5. **Don't commit config.json** to git
@@ -234,7 +236,7 @@ Trusted public HTTPS requires a real FQDN. IP-only HTTPS is supported only with 
 - `/api/prpc/:method` - pRPC calls
 - `/api/network` - Network diagnostics
 - `/api/system` - System stats
-- `/terminal` (WebSocket) - Terminal access
+- `/terminal` (WebSocket) - Admin-only terminal access
 
 ### Admin Only
 - `/api/users/*` - User management
@@ -278,7 +280,7 @@ sudo systemctl start pod-manager
 
 ### Terminal not connecting
 
-- Ensure **Read-Only toggle is OFF** (terminal blocked when protected)
+- Terminal access requires an admin session
 - Check WebSocket connection in browser console (F12)
 - Ensure `enableTerminal: true` in config.json
 
