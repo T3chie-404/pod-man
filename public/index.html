@@ -39,7 +39,7 @@
                 window.centralEmail = sessionData.centralEmail || '';
                 window.ssoAuthenticated = Boolean(sessionData.ssoAuthenticated);
 
-                const applyTerminalVisibility = () => {
+                const applySessionContext = () => {
                     const terminalButton = document.querySelector('.tab-btn[data-tab="terminal"]');
                     if (terminalButton) {
                         terminalButton.style.display = window.terminalAllowed ? '' : 'none';
@@ -50,12 +50,20 @@
                             ? `Central session: ${window.centralEmail}`
                             : `Local session: ${window.username}`;
                     }
+                    window.dispatchEvent(new CustomEvent('podman:session-ready', {
+                        detail: {
+                            role: window.userRole,
+                            terminalAllowed: window.terminalAllowed,
+                            centralEmail: window.centralEmail,
+                            ssoAuthenticated: window.ssoAuthenticated
+                        }
+                    }));
                 };
 
                 if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', applyTerminalVisibility, { once: true });
+                    document.addEventListener('DOMContentLoaded', applySessionContext, { once: true });
                 } else {
-                    applyTerminalVisibility();
+                    applySessionContext();
                 }
                 
             } catch (error) {

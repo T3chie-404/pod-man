@@ -102,6 +102,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+window.addEventListener('podman:session-ready', () => {
+    initReadOnlyToggle();
+});
+
 // ============================================================================
 // TAB MANAGEMENT
 // ============================================================================
@@ -319,9 +323,9 @@ function initReadOnlyToggle() {
         });
     };
 
-    toggle.addEventListener('change', () => {
+    toggle.onchange = () => {
         apply();
-    });
+    };
 
     apply();
 }
