@@ -36,11 +36,19 @@
                 window.userRole = sessionData.role;
                 window.username = sessionData.username;
                 window.terminalAllowed = sessionData.role === 'admin';
+                window.centralEmail = sessionData.centralEmail || '';
+                window.ssoAuthenticated = Boolean(sessionData.ssoAuthenticated);
 
                 const applyTerminalVisibility = () => {
                     const terminalButton = document.querySelector('.tab-btn[data-tab="terminal"]');
                     if (terminalButton) {
                         terminalButton.style.display = window.terminalAllowed ? '' : 'none';
+                    }
+                    const sessionIdentity = document.getElementById('header-session-identity');
+                    if (sessionIdentity) {
+                        sessionIdentity.textContent = window.ssoAuthenticated && window.centralEmail
+                            ? `Central session: ${window.centralEmail}`
+                            : `Local session: ${window.username}`;
                     }
                 };
 
@@ -65,6 +73,7 @@
                 <div class="header-title">
                     <h1>Pod-Man</h1>
                     <p id="header-hostname">Loading hostname...</p>
+                    <p id="header-session-identity" style="margin-top:6px; color:#94a3b8; font-size:13px;">Checking session identity...</p>
                 </div>
                 <div class="health-indicator">
                     <div class="health-info">
@@ -72,7 +81,7 @@
                         <span id="health-status" class="status-badge">Loading...</span>
                         <button class="icon-btn" id="health-info-btn" onclick="toggleHealthFormula()">?</button>
                     </div>
-                    <div class="readonly-toggle">
+                    <div class="readonly-toggle" id="readonly-toggle-wrap">
                         <span class="toggle-label">Read-Only</span>
                         <label class="switch">
                             <input type="checkbox" id="readonly-toggle" checked>

@@ -662,7 +662,10 @@ app.get("/api/check-session", (req, res) => {
       success: true,
       authenticated: true,
       username: req.session.username,
-      role: req.session.role
+      role: req.session.role,
+      centralEmail: req.session.centralEmail || null,
+      centralUserId: req.session.centralUserId || null,
+      ssoAuthenticated: Boolean(req.session.ssoAuthenticated)
     });
   } else {
     res.json({

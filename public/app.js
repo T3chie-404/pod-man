@@ -272,9 +272,24 @@ async function collectMetricsInBackground() {
 
 // Read-only toggle
 function initReadOnlyToggle() {
+    const toggleWrap = document.getElementById('readonly-toggle-wrap');
     const toggle = document.getElementById('readonly-toggle');
     const pill = document.getElementById('readonly-status');
     if (!toggle || !pill) return;
+
+    // Central node-admin sessions already went through explicit authn/authz and
+    // should not be blocked by the legacy client-side read-only guardrail.
+    if (window.userRole === 'admin' && window.ssoAuthenticated) {
+        state.readOnly = false;
+        toggle.checked = false;
+        if (toggleWrap) {
+            toggleWrap.style.display = 'none';
+        }
+        document.querySelectorAll('[data-protected="true"]').forEach(btn => {
+            btn.disabled = false;
+        });
+        return;
+    }
 
     // Non-admin users are locked in read-only mode for public launch.
     if (window.userRole !== 'admin') {
