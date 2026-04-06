@@ -210,35 +210,12 @@ prompt_install_mode() {
 }
 
 prompt_https_mode() {
-    print_step "Step 4: Optional HTTPS"
-
-    if prompt_yes_no "Enable HTTPS access through nginx? [y/N]:" "N"; then
-        HTTPS_ENABLED=true
-        echo ""
-        echo "HTTPS options:"
-        echo "  [S] Self-signed certificate using this server's IP"
-        echo "  [L] Trusted Let's Encrypt certificate using a domain"
-        echo ""
-        read -r -p "Choose option [S/l]: " HTTPS_MODE
-        HTTPS_MODE="${HTTPS_MODE:-S}"
-
-        if [[ "$HTTPS_MODE" =~ ^[Ll]$ ]]; then
-            HTTPS_MODE="letsencrypt"
-            read -r -p "Enter your FQDN (example: monitor.example.com): " SERVER_NAME
-            validate_domain "$SERVER_NAME"
-        else
-            HTTPS_MODE="self-signed"
-            SERVER_NAME="$(detect_public_ip)"
-            if [ -z "$SERVER_NAME" ]; then
-                read -r -p "Public IP for HTTPS certificate display: " SERVER_NAME
-            fi
-            [ -n "$SERVER_NAME" ] || die "A server IP is required for self-signed HTTPS"
-        fi
-        info "HTTPS mode selected: $HTTPS_MODE"
-    else
-        HTTPS_ENABLED=false
-        info "HTTPS disabled; Pod-Man will stay localhost-only"
-    fi
+    print_step "Step 4: Access Model"
+    HTTPS_ENABLED=false
+    HTTPS_MODE=""
+    SERVER_NAME=""
+    warn "Public HTTPS exposure of Pod-Man is disabled for the release candidate."
+    info "Pod-Man will stay localhost-only. Use Pod-Man Central, localhost, or SSH port forwarding for access."
 }
 
 validate_port() {
@@ -627,15 +604,10 @@ print_summary() {
     echo "  $local_url"
     echo ""
 
-    if [ "$HTTPS_ENABLED" = true ]; then
-        echo "HTTPS URL:"
-        echo "  https://${SERVER_NAME}:${DEFAULT_HTTPS_PORT}"
-        echo ""
-    else
-        echo "Remote access:"
-        echo "  ssh -L ${LOCAL_PORT}:localhost:${LOCAL_PORT} user@your-server"
-        echo ""
-    fi
+    echo "Remote access:"
+    echo "  Pod-Man Central (recommended for managed nodes)"
+    echo "  or ssh -L ${LOCAL_PORT}:localhost:${LOCAL_PORT} user@your-server"
+    echo ""
 
     if [ "$CENTRAL_MODE" = true ]; then
         echo "Central mode:"
@@ -650,7 +622,7 @@ print_summary() {
     fi
 
     echo "Next steps:"
-    echo "  1. Open the local or HTTPS URL above"
+    echo "  1. Open the local URL above"
     echo "  2. Complete first-time setup and create your admin account"
     echo "  3. If Central verification warned, inspect: sudo journalctl -u pod-manager -n 200"
     echo ""
