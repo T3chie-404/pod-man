@@ -58,6 +58,18 @@ warn() {
     echo -e "${YELLOW}!${NC} $1"
 }
 
+get_setup_token() {
+    node -e '
+const fs = require("fs");
+try {
+  const config = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(String(config?.authentication?.setupToken || ""));
+} catch (_) {
+  process.stdout.write("");
+}
+' "$INSTALL_DIR/config.json"
+}
+
 prompt_yes_no() {
     local prompt="$1"
     local default="${2:-N}"
@@ -564,6 +576,15 @@ run_xandeum_installer_noninteractive() {
 offer_xandeum_install_handoff() {
     print_step "Step 7: Optional pNode Software Install"
 
+    local setup_token=""
+    setup_token="$(get_setup_token)"
+
+    if [ -n "$setup_token" ]; then
+        echo -e "${YELLOW}Setup token for initial Pod-Man setup from Central:${NC}"
+        echo "  $setup_token"
+        echo ""
+    fi
+
     echo "Do you want to install pNode software now?"
     echo "  [1] Yes - Download and open the current Xandeum pNode installer"
     echo "  [2] Yes - Build a non-interactive prompt based on my inputs, then run the Xandeum installer"
@@ -595,7 +616,9 @@ offer_xandeum_install_handoff() {
 }
 
 print_summary() {
+    local setup_token=""
     local local_url="http://127.0.0.1:${LOCAL_PORT}"
+    setup_token="$(get_setup_token)"
 
     print_step "Installation Complete"
     echo "Pod-Man is now running."
@@ -614,10 +637,16 @@ print_summary() {
         echo "  Enabled with auto-connect"
         echo "  Central URL: $CENTRAL_URL"
         echo "  Verification: see installer output above"
+        if [ -n "$setup_token" ]; then
+            echo "  Setup token for initial Pod-Man setup from Central: $setup_token"
+        fi
         echo ""
     else
         echo "Central mode:"
         echo "  Disabled (local-only install)"
+        if [ -n "$setup_token" ]; then
+            echo "  Setup token for initial Pod-Man setup: $setup_token"
+        fi
         echo ""
     fi
 

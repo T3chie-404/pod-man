@@ -158,12 +158,57 @@
         .btn-danger:hover {
             background: #dc2626;
         }
+
+        .community-link {
+            margin-top: 18px;
+            text-align: left;
+            font-size: 14px;
+        }
+
+        .community-link a {
+            color: #a5b4fc;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .community-link a:hover {
+            color: #c4b5fd;
+            text-decoration: underline;
+        }
+
+        .field-help {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #a5b4fc;
+        }
+
+        .field-help summary {
+            cursor: pointer;
+            font-weight: 600;
+            list-style: none;
+        }
+
+        .field-help summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .field-help code {
+            display: block;
+            margin-top: 8px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.85);
+            color: #e2e8f0;
+            font-size: 12px;
+            word-break: break-word;
+        }
     </style>
 </head>
 <body>
     <div class="setup-container">
         <h1>⚡ Xandeum Pod Manager</h1>
         <p class="subtitle">First-time Setup</p>
+        <p class="community-link"><a href="https://discord.gg/xKnb2JkR" target="_blank" rel="noopener noreferrer">Pod-Man Community</a></p>
 
         <div id="message"></div>
 
@@ -188,6 +233,10 @@
             <div class="form-group">
                 <label for="setup-token">Setup Token</label>
                 <input type="password" id="setup-token" required>
+                <details class="field-help">
+                    <summary>Where do I find this?</summary>
+                    <code>grep -n '"setupToken"' /pod-man/config.json</code>
+                </details>
             </div>
 
             <div class="section">
