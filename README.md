@@ -1,6 +1,6 @@
 # Xandeum Pod Manager (Pod-Man)
 
-![Version](https://img.shields.io/badge/version-1.2.4-blue.svg)
+![Version](https://img.shields.io/badge/version-1.2.5-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)
 
 Interactive web-based monitoring and management dashboard for Xandeum pNodes. Monitor services, view logs, test pRPC API, diagnose network issues, track credits, view graphs, and, for local admin recovery, access an embedded terminal.
@@ -14,7 +14,8 @@ Interactive web-based monitoring and management dashboard for Xandeum pNodes. Mo
 - **Password hashing**: bcrypt with cost factor 10
 - **Session management**: Configurable timeout, secure cookies
 - **User management**: Admin can add/remove users
-- **Read-only demo mode**: Locked safety toggle for demo users
+- **Telegram account linking**: Supports Central password recovery and billing notifications
+- **Read-only public launch guardrail**: Standard and Demo sessions stay locked in protected mode
 
 ### 🎯 Dashboard Overview
 - **Real-time system stats**: CPU, RAM, disk usage, uptime
@@ -73,14 +74,14 @@ cd pod-man
 sudo bash install.sh
 ```
 
-The installer deploys Pod-Man to `/root/pod-man` and creates `pod-manager.service` to run as `root`.
-This is the expected runtime model for the current implementation because service management, root-shell admin terminal access, and related system integrations depend on root-owned paths and privileges.
+The installer creates `pod-manager.service` to run as `root`.
+New installs default to `/root/pod-man`, but if you run the installer from an existing Pod-Man checkout it preserves that directory and wires the service to that path.
+Root privileges remain the expected runtime model because service management, root-shell admin terminal access, and related system integrations depend on them.
 
 Installer v2 walks through one guided setup:
 - Choose `Pod-Man Central` or `Local-only`
 - If using Central, provide your existing API key and `wss://.../agent-connect`
 - If local-only, choose a localhost port (default `7000`)
-- Optionally enable HTTPS through nginx
 - Start `pod-manager.service`
 - Verify local health, and in Central mode also verify registration and reverse tunnel setup
 
@@ -91,7 +92,6 @@ install.sh
   -> write config.json
   -> install npm deps + pod-manager.service
   -> start Pod-Man on 127.0.0.1
-  -> optional nginx HTTPS proxy
   -> optional Central registration + reverse tunnel verification
 ```
 
@@ -103,7 +103,7 @@ install.sh
 ### Access Model
 
 - **Managed nodes**: Access Pod-Man remotely through Pod-Man Central.
-- **Local recovery**: Use `http://127.0.0.1:<port>` on-node or SSH port forwarding.
+- **Local recovery**: Use `http://127.0.0.1:<port>` on-node or `http://localhost:<port>` over an SSH tunnel.
 - **Direct public HTTPS exposure**: Not supported for the release candidate.
 
 ### First-Time Setup
@@ -115,6 +115,7 @@ install.sh
 2. **Create admin account**: 
    - You'll see the setup page automatically on first visit
    - Enter username and password for the admin account
+   - Enter the one-time setup token generated during install
    - Optionally add additional users (standard or demo roles)
    - Click "Complete Setup"
 
@@ -127,8 +128,8 @@ install.sh
 | Role | Service Control | Terminal Access | User Management | Read-Only Toggle |
 |------|----------------|-----------------|-----------------|------------------|
 | **Admin** | ✅ Full | ✅ Root shell | ✅ Yes | Can toggle |
-| **Standard** | ✅ Full | ✅ Root shell | ❌ No | Can toggle |
-| **Demo** | ❌ Blocked | ✅ Restricted shell | ❌ No | 🔒 Locked protected |
+| **Standard** | ❌ Blocked | ❌ Blocked | ❌ No | 🔒 Locked protected |
+| **Demo** | ❌ Blocked | ❌ Blocked | ❌ No | 🔒 Locked protected |
 
 ### Configuration
 
@@ -137,29 +138,75 @@ The `config.json` file is created from `config.json.example` and contains:
 ```json
 {
   "server": {
-    "host": "127.0.0.1",
-    "port": 7000
+    "host": "127.0.0.1",  // Keep localhost-only for normal installs
+    "port": 7000  // Local Pod-Man web UI port
   },
   "security": {
-    "enableServiceControl": true,
-    "enableTerminal": true,
-    "dangerousCommandWarnings": true,
-    "confirmDestructiveActions": true,
+    "enableServiceControl": true,  // Allows service start/stop/restart from the UI
+    "enableTerminal": true,  // Allows the embedded terminal for admin sessions
+    "dangerousCommandWarnings": true,  // Warn on obviously destructive terminal commands
+    "confirmDestructiveActions": true,  // Require confirmation before risky actions
     "rateLimit": {
-      "enabled": true,
+      "enabled": true,  // Keep enabled unless you are debugging locally
       "maxRequestsPerMinute": 60
     }
   },
   "authentication": {
-    "enabled": false,  // Set to true after first setup
-    "sessionSecret": "",  // Generated during setup
-    "sessionTimeout": 86400000,  // 24 hours
-    "users": []  // Populated during setup
+    "enabled": false,  // Becomes true after first setup completes
+    "sessionSecret": "",  // Generated automatically on first run
+    "sessionTimeout": 86400000,  // 24 hours in milliseconds
+    "users": [],  // Populated after you create local accounts
+    "setupToken": ""  // One-time token required for first-time setup
+  },
+  "services": [
+    "xandminer",
+    "xandminerd",
+    "pod"  // Services shown in the dashboard and service controls
+  ],
+  "prpc": {
+    "host": "127.0.0.1",  // Local pRPC target
+    "port": 6000  // Used by the built-in pRPC API tester
+  },
+  "terminal": {
+    "shell": "/bin/bash",  // Shell spawned for admin terminal sessions
+    "maxSessions": 3,  // Reference default; runtime limit is enforced separately
+    "dangerousCommands": [
+      "rm -rf /",
+      "dd if=",
+      "mkfs",
+      ":(){ :|:& };:",
+      "> /dev/sda",
+      "chmod -R 777 /"
+    ]
+  },
+  "centralManagement": {
+    "enabled": false,  // Set true to link this node to Pod-Man Central
+    "apiKey": "",  // Your Pod-Man Central API key
+    "centralUrl": "",  // Example: wss://pod-man.com/agent-connect
+    "autoConnect": false,  // Auto-connect to Central on service start
+    "metricsInterval": 30000,  // How often the node sends metrics to Central
+    "forceReconnectAfterMs": 180000,  // Force a fresh Central reconnect after 3 minutes
+    "restartAfterMs": 600000,  // Restart connector loop after 10 minutes if needed
+    "centralSshHost": "",  // Example: pod-man.com
+    "centralSshUser": "ubuntu",  // Central SSH user for reverse tunnel bootstrap
+    "sshKnownHostsPath": "",  // Example: /root/.ssh/pod-manager-central-known_hosts
+    "allowRemoteSshKeyInstall": false,  // Keep false unless you intentionally want remote key install
+    "ownerCentralUserId": "",
+    "ownerCentralEmail": "",
+    "ownerBoundAt": "",
+    "ownerBindingSource": "",  // Populated after Central owner binding
+    "unattendedUpgradesEnabled": true,  // Allow Central-managed unattended upgrades
+    "remoteServiceControlEnabled": true  // Allow Central to issue remote service-control commands
   }
 }
 ```
 
 **⚠️ Important**: `config.json` is in `.gitignore` and should NEVER be committed to git (contains hashed passwords and session secrets).
+
+Most users should let the installer write this file. The fields you are most likely to adjust manually are:
+- `server.port` if you want a different local Pod-Man port
+- `centralManagement.enabled`, `apiKey`, and `centralUrl` when linking an existing local node to Central
+- `centralManagement.centralSshHost` and `sshKnownHostsPath` if you are repairing Central reverse tunnel trust
 
 ## Usage
 
@@ -174,6 +221,13 @@ http://localhost:7000
 ```
 
 If you chose a different local port during install, replace `7000` with that port.
+
+To find the setup token later on the node:
+
+```bash
+PODMAN_DIR="$(systemctl cat pod-manager.service | sed -n 's/^WorkingDirectory=//p' | tail -n 1)"
+grep -n '"setupToken"' "$PODMAN_DIR/config.json"
+```
 
 ### Remote Recovery
 
@@ -207,14 +261,14 @@ http://localhost:7000
 - **Rate limiting**: 60 requests/minute
 - **Input sanitization**: All user inputs validated
 - **Command whitelist**: Only approved services/actions
-- **Read-only toggle**: Defaults to protected mode
+- **Read-only guardrail**: Non-admin sessions stay locked in protected mode for public launch
 - **Terminal restrictions**: Terminal access is admin-only
 
 ### ⚠️ Security Best Practices
 
 1. **Use strong passwords** for admin accounts
 2. **Use Central or SSH port forwarding** for remote recovery
-3. **Keep read-only toggle ON** when not making changes
+3. **Keep the read-only toggle ON** during admin sessions unless you are intentionally making changes
 4. **Review audit logs** regularly
 5. **Don't commit config.json** to git
 6. **Change passwords after setup** if needed
@@ -223,23 +277,44 @@ http://localhost:7000
 
 ### Public (No Auth Required)
 - `/` - Redirects to setup or login
-- `/setup.html` - First-time setup (only if no users exist)
+- `/setup.html` - First-time setup page
 - `/login.html` - Login page
-- `/api/setup/status` - Check if setup is complete
-- `/api/auth/login` - Login endpoint
+- `/api/setup/status` - Check whether setup is complete
+- `/api/setup/initialize` - Complete first-time setup
+- `/api/login` - Login endpoint
+- `/api/logout` - Logout endpoint
+- `/api/check-session` - Session status
+- `/sso/central` - Central SSO entrypoint
 
 ### Protected (Auth Required)
 - `/api/dashboard` - Dashboard data
-- `/api/services` - Service management
+- `/api/services` - Service summary
+- `/api/services/:name` - Individual service status
 - `/api/logs/:service` - Service logs
-- `/api/pod-credits` - Credits data
 - `/api/prpc/:method` - pRPC calls
+- `/api/component-versions` - Current component versions
 - `/api/network` - Network diagnostics
 - `/api/system` - System stats
-- `/terminal` (WebSocket) - Admin-only terminal access
+- `/api/health` - Health score summary
+- `/api/pod-pubkey` - Active pod pubkey
+- `/api/pod-cluster` - Cluster detection
+- `/api/pod-credits` - Credits summary
+- `/api/devnet-eligibility` - Percentile and threshold details
+- `/api/central/status` - Current Central configuration status
 
 ### Admin Only
-- `/api/users/*` - User management
+- `/api/users/add` - Add local users
+- `/api/users/delete` - Delete local users
+- `/api/users/list` - List local users
+- `/api/services/:name/:action` - Start, stop, or restart a service
+- `/api/services/restart-all` - Restart all managed services
+- `/api/find-pubkey` - Passive pubkey scan and cache
+- `/api/terminal/activity` - Terminal activity log
+- `/api/central/owner/reset` - Reset local Central owner binding
+- `/api/central/configure` - Save Central config
+- `/api/central/connect` - Connect to Central
+- `/api/central/disconnect` - Disconnect from Central
+- `/terminal` (WebSocket) - Interactive terminal (admin session required)
 
 ## Troubleshooting
 
@@ -253,7 +328,8 @@ sudo systemctl status pod-manager
 sudo journalctl -u pod-manager -n 50
 
 # Verify config
-cat /root/pod-man/config.json | grep "enabled"
+PODMAN_DIR="$(systemctl cat pod-manager.service | sed -n 's/^WorkingDirectory=//p' | tail -n 1)"
+grep -n '"enabled"' "$PODMAN_DIR/config.json"
 ```
 
 ### Forgot admin password
@@ -263,7 +339,8 @@ cat /root/pod-man/config.json | grep "enabled"
 sudo systemctl stop pod-manager
 
 # Reset config
-cp /root/pod-man/config.json.example /root/pod-man/config.json
+PODMAN_DIR="$(systemctl cat pod-manager.service | sed -n 's/^WorkingDirectory=//p' | tail -n 1)"
+cp "$PODMAN_DIR/config.json.example" "$PODMAN_DIR/config.json"
 
 # Start service
 sudo systemctl start pod-manager
@@ -281,6 +358,7 @@ sudo systemctl start pod-manager
 ### Terminal not connecting
 
 - Terminal access requires an admin session
+- Standard and Demo users cannot open the embedded terminal
 - Check WebSocket connection in browser console (F12)
 - Ensure `enableTerminal: true` in config.json
 
@@ -288,7 +366,8 @@ sudo systemctl start pod-manager
 
 - Verify services are running: `systemctl status pod xandminer xandminerd`
 - Check permissions: Monitor must run as root for systemctl access
-- Check read-only toggle is OFF for service control
+- Service control requires an admin session
+- Check read-only toggle is OFF before using service controls
 
 ## Development
 
@@ -300,7 +379,7 @@ npm install
 npm run dev
 
 # Test authentication
-curl -X POST http://127.0.0.1:7000/api/auth/login \
+curl -X POST http://127.0.0.1:7000/api/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"yourpass"}'
 ```
@@ -342,6 +421,8 @@ Apache License 2.0 - see [LICENSE](LICENSE) file for details
 
 For issues, questions, or contributions:
 - Open an issue on [GitHub](https://github.com/T3chie-404/pod-man/issues)
+- Join the [(Brand New) Pod-Man Discord Community](https://discord.gg/xKnb2JkR)
+- Coffee fund: `2vyUcVL7WAE4Mucph1bKf81iEMRKQRQnzT7eGsBM8ETM`
 - Star the repository if you find it useful!
 
 ---
